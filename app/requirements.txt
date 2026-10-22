@@ -1,0 +1,4 @@
+PySide6>=6.8,<7
+docxtpl[subdoc]==0.20.2
+numpy>=2.0,<3
+pyzmq>=25,<28
