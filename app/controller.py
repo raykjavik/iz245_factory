@@ -1,7 +1,7 @@
 """DUT backend. ProjectMenu retains ownership of the active project.
 
-Uses the bundled iz245 package, or an injected device_factory
-with the same Device(ip), open(tdoa_setting), device_info(), close() interface.
+The controller owns a single Device.
+Inject device_factory(ip) for simulated hardware.
 All device I/O runs in a QThread. Project mutations and notifications run on
 Qt's GUI thread after the device has been closed.
 """
@@ -9,11 +9,11 @@ from collections.abc import Mapping
 from dataclasses import replace
 from ipaddress import ip_address
 from PySide6.QtCore import QObject, QThread, Signal, Slot
-from iz245.device import Device
 
 
 def default_device_factory(ip):
-    return Device(ip)
+    from capture_device import CaptureDevice
+    return CaptureDevice(ip=ip)
 
 
 def properties_from_device_info(info):
@@ -38,9 +38,11 @@ class _DeviceInfoThread(QThread):
 
     def run(self):
         try:
-            if not self.device.open(tdoa_setting=False):
-                raise ConnectionError("Device.open() failed; check the address and device availability.")
-            self.updates = properties_from_device_info(self.device.device_info())
+            self.device.open(tdoa_setting=False)
+            device = self.device
+            if not device.connected:
+                raise ConnectionError("Device could not connect to DUT.")
+            self.updates = properties_from_device_info(device.device_info())
         except Exception as exc:
             self.error = str(exc) or type(exc).__name__
         finally:
@@ -52,7 +54,7 @@ class _DeviceInfoThread(QThread):
 
 
 class Controller(QObject):
-    """Owns the Device; receives the current project through a provider callable.
+    """Owns Device; receives the current project through a provider callable.
 
     Signals:
         auto_properties_updated: active project's readback has been committed.
@@ -88,12 +90,11 @@ class Controller(QObject):
         if project is None:
             self.connection_failed.emit("No project is open.")
             return
-        ip = project.prop_auto.dut_ip.strip()
+        ip = project.settings.dut_ip.strip()
         try:
             ip_address(ip)
             if requested_ip.strip() != ip:
                 raise ValueError("Requested address no longer matches the current project.")
-            # The supplied Device constructor does not perform network I/O.
             self.device = self._device_factory(ip)
         except Exception as exc:
             self.connection_failed.emit(str(exc))
@@ -115,7 +116,7 @@ class Controller(QObject):
         self._request_ip = None
         try:
             current = self._project_provider()
-            if current is not project or current.prop_auto.dut_ip.strip() != ip:
+            if current is not project or current.settings.dut_ip.strip() != ip:
                 self.message.emit("DUT response discarded because the active project or IP changed.")
                 return
             if thread.error:

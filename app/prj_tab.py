@@ -22,6 +22,8 @@ AUTO_LABELS = {
     "ver_hw_fpga": "FPGA hardware version",
     "ver_fpga": "FPGA version",
     "ver_fw": "Firmware version",
+    "cable_calib_path": "Cable calibration",
+    "operator": "Operator",
 }
 
 
@@ -59,16 +61,7 @@ class ProjectTab(QWidget):
         hw_layout = QVBoxLayout(hw)
         hw_layout.setContentsMargins(16, 24, 16, 16)
         hw_layout.setSpacing(12)
-        hw_layout.addWidget(QLabel("IP address"))
-        ip_row = QHBoxLayout()
-        self.dut_ip = QLineEdit()
-        self.dut_ip.setPlaceholderText("10.0.1.245")
-        self.dut_ip.setMinimumHeight(32)
-        self.connect_button = QPushButton("Connect")
-        self.connect_button.setMinimumHeight(32)
-        ip_row.addWidget(self.dut_ip, 1)
-        ip_row.addWidget(self.connect_button)
-        hw_layout.addLayout(ip_row)
+        # Connection settings and Connect action live in SettingsTab.
         self.connection_status = QLabel("DUT connection is not configured yet.")
         self.connection_status.setWordWrap(True)
         hw_layout.addWidget(self.connection_status)
@@ -83,12 +76,7 @@ class ProjectTab(QWidget):
         self.body_layout.addStretch()
         scroll.setWidget(body)
         outer.addWidget(scroll)
-        self.dut_ip.textChanged.connect(self._ip_edited)
-        self.connect_button.clicked.connect(self._connect)
         self.setEnabled(False)
-
-    def is_valid(self):
-        return self.project is not None and self._device_info_ok
 
     def load_project(self, project):
         self._device_info_ok = False
@@ -108,9 +96,6 @@ class ProjectTab(QWidget):
             self.fields[key] = edit
             self.form.addRow(format_manual_key(key), edit)
             edit.textChanged.connect(self._edited)
-        self.dut_ip.blockSignals(True)
-        self.dut_ip.setText(project.prop_auto.dut_ip)
-        self.dut_ip.blockSignals(False)
         self.notice.setText(
             f"Template fields unavailable: {self.template_error}\n"
             "Place template.docx beside app.py and reopen the project."
@@ -118,20 +103,10 @@ class ProjectTab(QWidget):
         self.connection_status.setText("Saved values shown below; no live DUT connection confirmed.")
         self._refresh_auto_display()
         self.setEnabled(True)
-        self._update_connect_button()
         self.validity_changed.emit(self.is_valid())
 
-    def _valid_ip(self):
-        try:
-            ip_address(self.dut_ip.text().strip())
-            return True
-        except ValueError:
-            return False
-
     def is_valid(self):
-        # Section readiness reflects inputs only, not live connectivity.
-        return bool(self.project is not None and not self.template_error and
-                    self._valid_ip() and all(e.text().strip() for e in self.fields.values()))
+        return self.project is not None and self._device_info_ok
 
     def _edited(self, *_):
         if self.project is None:
@@ -140,39 +115,17 @@ class ProjectTab(QWidget):
         self.changed.emit()
         self.validity_changed.emit(self.is_valid())
 
-    def _ip_edited(self, *_):
-        if self.project is None:
-            return
-        # Changing devices invalidates values acquired from the previous device.
+    def invalidate_device(self):
         self._device_info_ok = False
-        self.project.prop_auto = AutoProps(dut_ip=self.dut_ip.text().strip())
+        self.connection_status.setText('DUT address changed; read its identity again in Settings.')
         self._refresh_auto_display()
-        self.connection_status.setText("Address changed; retrieve properties from this DUT again.")
-        self._update_connect_button()
-        self.changed.emit()
-        self.validity_changed.emit(self.is_valid())
+        self.validity_changed.emit(False)
 
     def _refresh_auto_display(self):
         data = self.project.prop_auto.to_dict()
         width = max(len(label) for label in AUTO_LABELS.values())
         self.auto_props_text.setPlainText("\n".join(
             f"{AUTO_LABELS[key]:<{width}} : {value or '—'}" for key, value in data.items()))
-
-    def _update_connect_button(self):
-        self.connect_button.setEnabled(self.project is not None and self._valid_ip() and not self._connecting)
-        self.dut_ip.setEnabled(not self._connecting)
-        self.connect_button.setText("Connecting…" if self._connecting else "Connect")
-
-    def _connect(self):
-        if not self.project or not self._valid_ip() or self._connecting:
-            return
-        if not self.receivers("2connect_requested(QString)"):
-            self.connection_status.setText("DUT connection is not implemented. Attach a handler to connect_requested.")
-            return
-        self._connecting = True
-        self.connection_status.setText(f"Connecting to {self.project.prop_auto.dut_ip}…")
-        self._update_connect_button()
-        self.connect_requested.emit(self.project.prop_auto.dut_ip)
 
     def set_auto_properties(self, data):
         """Replace DUT readback after a successful connection; IP remains user-owned.
@@ -187,12 +140,13 @@ class ProjectTab(QWidget):
         if "dut_ip" in payload and payload["dut_ip"] != current_ip:
             raise ValueError("DUT response address does not match the current project.")
         payload["dut_ip"] = current_ip
+        payload.setdefault("cable_calib_path", self.project.prop_auto.cable_calib_path)
+        payload.setdefault("operator", self.project.prop_auto.operator)
         automatic = AutoProps.from_dict(payload)
         self.project.prop_auto = automatic
         self._connecting = False
         self._refresh_auto_display()
         self.connection_status.setText(f"Properties received from {current_ip}.")
-        self._update_connect_button()
         self.changed.emit()
         self.validity_changed.emit(self.is_valid())
 
@@ -204,11 +158,11 @@ class ProjectTab(QWidget):
         self._refresh_auto_display()
         self.connection_status.setText(
             f"Properties read from {self.project.prop_auto.dut_ip}; device disconnected.")
-        self._update_connect_button()
         self._device_info_ok = True
         self.validity_changed.emit(self.is_valid())
 
     def connection_failed(self, message):
+        self._device_info_ok = False
+        self.validity_changed.emit(False)
         self._connecting = False
         self.connection_status.setText(f"Connection failed: {message}")
-        self._update_connect_button()

@@ -13,7 +13,8 @@ from collections import namedtuple
 import pickle
 
 from iz245.geo import LocalTangentPlane
-from iz245.protocol import HeaderV41, CAPTURE_SAMPLE_BYTES, capture_iq_data
+from iz245.cable_calibration import read_cable_calibration
+from iz245.protocol import HeaderV41, CAPTURE_SAMPLE_BYTES_I32, read_capture_v47, read_capture_perpartes_v47
 from iz245.connection_utils import connect_main_scpi, connect_main_capture, connect_gps_scpi, connect_tcp_ip, TIMEOUT_SCPI
 from iz245.scpi_utils import scpi_query, scpi_queries, scpi_command, scpi_commands
 from iz245.models import Receiver, Measurement
@@ -42,15 +43,17 @@ class CaptureJob:
     error: Optional[BaseException] = None
 
 
-class SMA1000B:
+class RSGenerator:
     def __init__(self, ip="10.0.1.54",port=5025) -> None:
         self.main_scpi: socket = None
         self.ip: str = ip
         self.port = port
         self.scpi_lock = RLock()
         self.connected = False
+        self.cable_calib: tuple[np.ndarray, np.ndarray] | None = None
 
-    def open(self, tdoa_setting):
+
+    def open(self):
         with self.scpi_lock:
             if self.connected:
                 self.close()
@@ -75,18 +78,49 @@ class SMA1000B:
                 self.main_scpi = None
             self.connected = False
 
-    def tune(self,frq_hz):
+    def load_calibration(self, cable_calib_path: Path):
+        data = read_cable_calibration(cable_calib_path)
         with self.scpi_lock:
-            opc = scpi_query(
-                self.main_scpi,
-                f"FREQ {frq_hz:.2f}Hz;*OPC?"
-            )
-            if opc.strip() != "1":
-                raise RuntimeError(f"Unexpected *OPC? response: {opc!r}")
+            self.cable_calib = data
 
+    def get_cable_offset(self, frq_hz: float) -> float:
+        frequency = float(frq_hz)
+        if not np.isfinite(frequency) or frequency <= 0:
+            raise ValueError('Frequency must be finite and positive.')
+        if self.cable_calib is None:
+            return 0.0
+        frequencies, values = self.cable_calib
+        if frequencies[0] >= frequency:
+            return values[0] 
+        
+        if frequency >= frequencies[-1]:
+            return values[-1]
+            
+        return float(np.interp(frequency, frequencies, values))
+
+    def tune(self, frq_hz):
+        with self.scpi_lock:
+            commands = ""
+            if self.cable_calib is not None:
+                offset = self.get_cable_offset(frq_hz)
+                commands.append(f'SOURCE:POWER:OFFSET {-offset:.6f};:')
+            commands+=f'FREQ {frq_hz:.2f}Hz'
+            self.cmd(commands)
+           
     def cmd(self,cmd):
         scpi_command(self.main_scpi, cmd)
-        
+
+    def cmds(self,cmds):
+        scpi_commands(self.main_scpi, cmds)
+
+    def opc(self):
+        opc = scpi_query(
+            self.main_scpi,
+            f"*OPC?"
+        )
+        if opc.strip() != "1":
+            raise RuntimeError(f"Unexpected *OPC? response: {opc!r}")
+  
 
 
 class Device:
@@ -98,6 +132,8 @@ class Device:
         self.header = HeaderV41()
         self.connected = False
         self.scpi_lock = RLock()
+        self.sample_bytes = 8
+        
 
     def _main_scpi_command(self, command: str) -> None:
         with self.scpi_lock:
@@ -200,7 +236,6 @@ class Device:
         time.sleep(0.05)
         self._main_scpi_commands(
             [
-                "TRACe:TYPe:MEMory:FORMAT32:BANDwidth:UPPer 1",
                 "SYST:BOOT:MOD READY",
                 "INP:PRES OFF",
                 "INP:GAIN 0",
@@ -213,20 +248,22 @@ class Device:
         self._main_scpi_command(f"FREQ {frq:.2f}Hz")
       
 
-    def measure_point_rms(self, frq, dwell_sec):
+    def tune_awaited(self, frq):
         with self.scpi_lock:
             opc = scpi_query(
                 self.main_scpi,
-                f"FREQ {frq:.2f}Hz;*OPC?"
+                f"FREQ {frq:.2f}Hz;:*OPC?"
             )
             if opc.strip() != "1":
-                raise RuntimeError(f"Unexpected *OPC? response: {opc!r}")
+                print(opc)
+                raise RuntimeError(f"Unexpected OPC? response: {opc!r}")
 
-            scpi_command(self.main_scpi, "DETector:CLEar")
+    def measure_point_rms(self,dwell_sec=0.0):
+        scpi_command(self.main_scpi, "DETector:CLEar")
+        if dwell_sec>1.0:
             time.sleep(dwell_sec)
-
-            response = scpi_query(self.main_scpi, "sense:data?")
-            return float(response.split(",")[3])
+        response = scpi_query(self.main_scpi, "sense:data?")
+        return float(response.split(",")[3])
 
     def set_preselector(self, enable: bool):
         with self.scpi_lock:
@@ -262,16 +299,21 @@ class Device:
         return info
 
     def ensure_rx_buffer(self, n):
-        needed = HeaderV41.SIZE + n * CAPTURE_SAMPLE_BYTES
+        needed = HeaderV41.SIZE + n * CAPTURE_SAMPLE_BYTES_I32 
         if len(self.raw_rx) != needed:
             self.raw_rx = bytearray(needed)
 
-    def capture_from_ts(self, ts_master, n):
+    def request_capture_from_ts(self, ts_master, n):
         self._main_scpi_commands(
             [
                 f"TRACe:TYPe:MEMory:RAM:TIME {ts_master}",
                 f"TRACE:TYPE:MEM:SEND {n * 2}",
             ]
+        )
+
+    def request_capture(self,  n):
+        self._main_scpi_command(
+            f"TRACE:TYPE:MEM:SEND {n * 2}",
         )
 
     def get_receiver(self):
@@ -316,10 +358,9 @@ class Device:
         )
 
     def get_trace_mem_time_ns(self) -> int:
-        ts_s = float(
-            self._main_scpi_query("TRACE:TYPE:MEM:TIM?")
+        return int(
+            self._main_scpi_query("TRACE:TYPE:MEM:TIM?").replace(".","")
         )
-        return int(ts_s * 1e9)
 
     def lin_sweep(
         self,
@@ -386,6 +427,48 @@ class Device:
                 )
                 return
 
+    def read_capture(self,write_buffer,n):
+        read_capture_v47(
+            sock_capture=self.capture_socket,
+            raw_rx=self.raw_rx,
+            write_buffer=write_buffer,
+            samples=n,
+            sample_bytes=self.sample_bytes,
+            header=self.header
+        )
+        
+    def read_capture_perpartes(self,clb,write_buffer,n=2048,cnt=16,overlap=0.5):
+        read_capture_perpartes_v47(
+            sock_capture=self.capture_socket,
+            clb=clb,
+            write_buffer=write_buffer,
+            header=self.header,
+            sample_bytes=self.sample_bytes,
+            n=n,
+            cnt=cnt,
+            overlap=overlap,
+        )  
+        
+
+    def opc(self):
+        opc = scpi_query(
+            self.main_scpi,
+            f"*OPC?"
+        )
+        if opc.strip() != "1":
+            raise RuntimeError(f"Unexpected *OPC? response: {opc!r}")
+
+
+    def set_16b_iq_format(self):
+        self._main_scpi_command("TRACe:TYPe:MEMory:FORMAT32:BANDwidth:UPPer 1")
+        self.sample_bytes = 4
+
+
+    def set_32b_iq_format(self):
+        self._main_scpi_command("TRACe:TYPe:MEMory:FORMAT32:BANDwidth:UPPer 100M")
+        self.sample_bytes = 8
+
+
 
 class DeviceManager:
     def __init__(
@@ -415,6 +498,8 @@ class DeviceManager:
         self.measurement: Measurement = None
         self.capture_ready: bool = False
         self.iq_buffer: List[np.array] = np.zeros((0, 0))
+
+
 
     def print_status(self):
         print("Device Manger Status:")
@@ -482,6 +567,9 @@ class DeviceManager:
             connected.append(ok)
 
         self.all_connected = all_connected
+        if tdoa_setting:
+            self.set_16b_iq_format() 
+
         return connected
 
     def _clear_capture_queues(self):
@@ -603,6 +691,8 @@ class DeviceManager:
                 "not all devices connected"
             )
 
+
+
     def capture_worker(self, i: int):
         device = self.devices[i]
         q = self.capture_queues[i]
@@ -622,12 +712,9 @@ class DeviceManager:
                 try:
                     n = len(job.write_buffer)
 
-                    capture_iq_data(
-                        device.capture_socket,
-                        device.raw_rx,
+                    device.read_capture(
                         job.write_buffer,
                         n,
-                        device.header,
                     )
 
                     if not np.any(
@@ -694,7 +781,7 @@ class DeviceManager:
                 "call capture init befor "
                 "start capturing"
             )
-
+ 
         nd, ns = iq_buffer.shape
 
         if nd != len(self.devices):
@@ -716,7 +803,7 @@ class DeviceManager:
             )
             jobs.append(job)
 
-            d.capture_from_ts(
+            d.request_capture_from_ts(
                 ts,
                 ns,
             )
@@ -756,6 +843,7 @@ class DeviceManager:
                 raise RuntimeError(
                     f"Capture worker {i} failed: "
                     f"{job.error!r}"
+                    f"{job.error.__traceback__}"
                 )
 
         d_master = self.devices[0]

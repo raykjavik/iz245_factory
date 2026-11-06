@@ -3,7 +3,8 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QMessageBox
-from project import FactoryProject, render_reports
+from project import FactoryProject
+from report_dialog import ReportDialog
 
 
 class ProjectMenu(QObject):
@@ -18,6 +19,11 @@ class ProjectMenu(QObject):
         self._action(project_menu, "&New", self.new_project, QKeySequence.StandardKey.New)
         self._action(project_menu, "&Open", self.open_project, QKeySequence.StandardKey.Open)
         self.save_action = self._action(project_menu, "&Save", self.save_project, QKeySequence.StandardKey.Save)
+        self.pipelines_menu=window.menuBar().addMenu('&Pipelines')
+        self.run_rf1_pipeline_action=self._action(self.pipelines_menu,'Run RF1 pipeline',
+            lambda:self._run_pipeline('ch1'))
+        self.run_rf2_pipeline_action=self._action(self.pipelines_menu,'Run RF2 pipeline',
+            lambda:self._run_pipeline('ch2'))
         report_menu = window.menuBar().addMenu("&Report")
         self.regenerate_action = self._action(report_menu, "&Regenerate", self.regenerate_report)
         self.open_report_action = self._action(report_menu, "&Open", self.open_report)
@@ -32,11 +38,18 @@ class ProjectMenu(QObject):
         menu.addAction(action)
         return action
 
+    def _run_pipeline(self,action):
+        if self.project is None:
+            return
+        self.window.tabs.setCurrentWidget(self.window.calibration_tab)
+        self.window.calibration_tab.start(action)
+
     def _error(self, title, exc):
         QMessageBox.critical(self.window, title, str(exc))
 
     def _update(self):
-        for action in (self.save_action, self.regenerate_action, self.open_report_action):
+        for action in (self.save_action,self.regenerate_action,self.open_report_action,
+                       self.run_rf1_pipeline_action,self.run_rf2_pipeline_action):
             action.setEnabled(self.project is not None)
         name = self.project.name if self.project else "No project"
         self.window.setWindowTitle(f"{'*' if self.dirty else ''}{name} — Receiver calibration")
@@ -97,6 +110,20 @@ class ProjectMenu(QObject):
         except Exception as exc:
             self._error("Cannot open project", exc)
 
+    def open_default_project(self, path):
+        if path is None or self.project is not None:
+            return False
+        path = Path(path).expanduser()
+        if not path.is_file():
+            return False
+        try:
+            self._activate(FactoryProject.open_project(path))
+            self.window.statusBar().showMessage(f'Opened default project: {path}')
+            return True
+        except Exception as exc:
+            self._error('Cannot open default project', exc)
+            return False
+
     def save_project(self):
         if self.project is None:
             return False
@@ -114,7 +141,11 @@ class ProjectMenu(QObject):
         if self.project is None or not self.save_project():
             return
         try:
-            path = render_reports(self.project)
+            dialog = ReportDialog(self.project, self.window)
+            try:
+                path = dialog.generate()
+            finally:
+                dialog.deleteLater()
             self.window.statusBar().showMessage(f"Report generated: {path}", 6000)
         except Exception as exc:
             self._error("Cannot generate report", exc)

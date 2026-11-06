@@ -2,7 +2,7 @@ from socket import socket
 from typing import List
 import time
 
-SCPI_PRINT_OUT = False
+SCPI_PRINT_OUT = True
 
 def scpi_query(sock: socket, query_str: str):
     if query_str[-1] != "?":

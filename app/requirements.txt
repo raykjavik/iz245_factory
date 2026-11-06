@@ -2,3 +2,9 @@ PySide6>=6.8,<7
 docxtpl[subdoc]==0.20.2
 numpy>=2.0,<3
 pyzmq>=25,<28
+
+pyqtgraph>=0.13.7,<0.15
+
+scipy>=1.11,<2
+
+matplotlib>=3.8,<4
