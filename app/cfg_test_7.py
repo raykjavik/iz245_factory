@@ -1,16 +1,17 @@
 """Domain configuration, measurement procedure and report content."""
+import report_tools
 # Presentation for each selectable metric: label, attribute, unit, display offset.
 DISPLAY_METRICS = (
     ('IP3','ip3_dbm','dBm',0.0),
     ('SFDR','sfdr_db','dB',0.0),
-    ('NF','nf_db','dB',0.0),
+    ('NF','nf_db','dB/Hz',0.0),
     ('P signal','signal_dbm','dBm',0.0),
     ('P IM3','im3_dbm','dBm',0.0),
 )
 
 import numpy as np
 from iz245.device import Device
-from cfg_common import (_CAL_ON, _RF1, _RF2, _GAIN_ON, _GAIN_OFF, _IFBAND_MANUAL, _PRESELECTOR_OFF, _PRESELECTOR_ON, _PG_OFF, _RST)
+from cfg_common import (_CAL_ON, _RF1, _RF2, _GAIN_ON, _GAIN_OFF, _IFBAND_MANUAL, _PRESELECTOR_OFF, _PRESELECTOR_ON, _PG_OFF, _RST, _RSOC_OUT)
 
 FREQ_TEST7_RF1 = np.array([
     38e6, 118e6, 260e6, 520e6, 1080e6, 2600e6, 3860e6, 5650e6,
@@ -46,17 +47,56 @@ from pathlib import Path
 from measurement import IP3Measurement, IP3_ARRAY_FIELDS
 import time
 
+# R&S SMATE200A Operating Manual 1401.0940.32-14, printed pages 770/772.
+# DUT reference output -> SMATE200A REF IN. One reference serves both RF paths.
+SMATE200A_REFERENCE_COMMANDS = (
+    'SOUR:ROSC:EXT:FREQ 10MHZ',
+    'SOUR:ROSC:SOUR EXT',
+)
+TEST7_NOISE_BANDWIDTH_HZ = 100e3
+TEST7_SIGNAL_BANDWIDTH_HZ = 3e3
+
+
+from detector import read_detector
+
+
+def configure_two_tones(generator, f1_hz, f2_hz, target_dbm, attenuator_db):
+    """Two SMATE200A RF paths; compensate each tone as in Test1.
+
+    Static path loss is added to POW. Only frequency-dependent cable correction
+    uses POW:OFFS. R&S level offset is display level minus RF output level.
+    """
+    power_dbm = target_dbm + attenuator_db
+    for channel, frequency in ((1, f1_hz), (2, f2_hz)):
+        correction = (generator.get_cable_offset(frequency)
+                      if getattr(generator, 'cable_calib', None) is not None else 0.)
+        generator.cmds([
+            f'SOUR{channel}:FREQ:MODE CW', f'SOUR{channel}:POW:MODE CW',
+            f'SOUR{channel}:MOD:ALL:STAT OFF',
+            f'SOUR{channel}:FREQ {frequency:.2f}Hz',
+            f'SOUR{channel}:POW:OFFS {correction:g}',
+            f'SOUR{channel}:POW {power_dbm:g}',
+        ])
+
 
 def measure_test7(device:Device, generator, spec, *, name='', noise_dwell_sec=1.0, signal_dwell_sec=0.1,
                   headroom_db=3.01, attenuator_db=0., operator='', temperature='',
                   checkpoint=lambda:None, check_cancel=lambda:None,
-                  on_row=lambda result:None, on_progress=lambda:None):
+                  wait=time.sleep, on_row=lambda result:None, on_progress=lambda:None):
     result=IP3Measurement(name=Path(name).stem,operator=operator,temperature=temperature,
         tone_spacing_hz=spec.tone_spacing_hz,noise_bandwidth_db=spec.noise_bandwidth_db,
         per_tone_headroom_db=headroom_db)
     rows=[]
     try:
-        device._main_scpi_commands(list(spec.commands))
+        generator.cmds(['OUTP1:STAT 0','OUTP2:STAT 0'])
+        checkpoint()
+        check_cancel()
+        # Reference output must be enabled after any reset in spec.commands.
+        device._main_scpi_commands(list(spec.commands)+[_RSOC_OUT])
+        device._main_scpi_query('*OPC?')
+        check_cancel()
+        generator.cmds(list(SMATE200A_REFERENCE_COMMANDS))
+        generator.opc()
         for frequency in spec.frequencies:
             checkpoint()
             check_cancel()
@@ -64,42 +104,28 @@ def measure_test7(device:Device, generator, spec, *, name='', noise_dwell_sec=1.
             f1=float(frequency)
             f2=f1+spec.tone_spacing_hz
 
-            generator.cmds([f'OUTP1:STAT 0',f'OUTP2:STAT 0'])
-            device._main_scpi_command("BAND 100k")
+            generator.cmds(['OUTP1:STAT 0','OUTP2:STAT 0'])
+            generator.opc()
+            device._main_scpi_command(f'BAND {TEST7_NOISE_BANDWIDTH_HZ:g}')
             device.tune_awaited(f1)
-            generator.opc()
-            device._main_scpi_command("DETector:CLEar")
-            time.sleep(noise_dwell_sec)
-            vals =    [float(x) for x in device._main_scpi_query('sense:data?').split(',') ] 
-            device._main_scpi_command("BAND 3k")
-            device._main_scpi_query("*opc?")
+            vals = read_detector(device,noise_dwell_sec,wait=wait,check_cancel=check_cancel)
             full_range=vals[-3]
-            noise_hz = vals[-4]
+            noise_hz = vals[-4]  # Receiver-provided normalized NF density, dB/Hz.
             target_dbm=full_range-headroom_db
-            offset=-attenuator_db
-           
+            checkpoint()
+            device._main_scpi_command(f'BAND {TEST7_SIGNAL_BANDWIDTH_HZ:g}')
+            device._main_scpi_query('*OPC?')
+            configure_two_tones(generator,f1,f2,target_dbm,attenuator_db)
             check_cancel()
-
-            if getattr(generator,'cable_calib',None) is not None:
-                generator.get_cable_offset(f2)
-                offset-=generator.get_cable_offset(f1)
-
-            generator.cmds([
-                f'SOURCE1:FREQ {f1}',f'SOURCE2:FREQ {f2}',
-                f'SOURCE1:POW {target_dbm}',f'SOURCE2:POW {target_dbm}',
-                f'SOURCE1:POWER:OFFSET {offset}',f'SOURCE2:POWER:OFFSET {offset}',
-            ])
-
-            check_cancel()
-            generator.cmds([f'OUTP1:STAT 1',f'OUTP2:STAT 1'])
+            generator.cmds(['OUTP1:STAT 1','OUTP2:STAT 1'])
             generator.opc()
-            time.sleep(signal_dwell_sec)
-            signal_dbm=device.measure_point_rms(signal_dwell_sec)
+            signal_dbm=read_detector(device,signal_dwell_sec,wait=wait,check_cancel=check_cancel)[3]
             
+            checkpoint()
             device.tune_awaited(f2+spec.tone_spacing_hz)
-            im3_dbm=device.measure_point_rms(signal_dwell_sec)
+            im3_dbm=read_detector(device,signal_dwell_sec,wait=wait,check_cancel=check_cancel)[3]
             
-            nf_db=noise_hz+174.0
+            nf_db=noise_hz  # Already normalized by the receiver; do not add 174.
             ip3_dbm=signal_dbm+(signal_dbm-im3_dbm)/2.0
             sfdr_db=(2.0/3.0)*(ip3_dbm-(-174.0+nf_db+spec.noise_bandwidth_db))
             
@@ -114,7 +140,7 @@ def measure_test7(device:Device, generator, spec, *, name='', noise_dwell_sec=1.
         result.datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         return result
     finally:
-        generator.cmds([f'OUTP1:STAT 0',f'OUTP2:STAT 0'])
+        generator.cmds(['OUTP1:STAT 0','OUTP2:STAT 0'])
 
 
 def evaluate_test7(measurement):
@@ -126,23 +152,24 @@ REPORT_TABLE = True
 
 
 def add_report(document, measurements):
-    from report_tools import (add_test_heading, add_measurement_heading, add_chart,
-                              add_table, no_measurements)
-    add_test_heading(document, 'Test7 IP3 and SFDR',
-        'Two tone measurements of signal and intermodulation levels, with calculated IP3, noise figure and SFDR.')
+    report_tools.add_test_heading(document, 'Test7 IP3 and SFDR',
+        'Two tone measurements of signal and intermodulation levels, with calculated IP3 and SFDR, and receiver-provided NF density (dB/Hz).')
     if not measurements:
-        no_measurements(document)
+        report_tools.no_measurements(document)
     for measurement in measurements:
-        add_measurement_heading(document, measurement, passed=evaluate_test7(measurement))
+        report_tools.add_measurement_heading(document, measurement, passed=evaluate_test7(measurement))
         document.add_paragraph(f'Tone spacing {measurement.tone_spacing_hz:g} Hz. '
             f'Per tone headroom {measurement.per_tone_headroom_db:g} dB below full range.')
+        if measurement.noise_unit != 'dB/Hz':
+            document.add_paragraph('Legacy Test7 noise conversion: remeasure to obtain receiver-provided NF density and corrected SFDR.')
+            continue
         if not measurement.has_data():
             document.add_paragraph('The saved measurement contains no complete data.')
             continue
         if REPORT_TABLE:
-            add_table(document, ['Frequency (MHz)', 'P signal (dBm)', 'P IM3 (dBm)',
-                                 'IP3 (dBm)', 'NF (dB)', 'SFDR (dB)'],
+            report_tools.add_table(document, ['Frequency (MHz)', 'P signal (dBm)', 'P IM3 (dBm)',
+                                 'IP3 (dBm)', 'NF density (dB/Hz)', 'SFDR (dB)'],
                       zip(*(getattr(measurement, field) for field in IP3_ARRAY_FIELDS)))
         if REPORT_CHART:
-            add_chart(document, measurement.freq_mhz*1e6, {'IP3':measurement.ip3_dbm}, ylabel='IP3 (dBm)',passed=evaluate_test7(measurement))
-            add_chart(document, measurement.freq_mhz*1e6, {'SFDR':measurement.sfdr_db}, ylabel='SFDR (dB)',passed=evaluate_test7(measurement))
+            report_tools.add_chart(document, measurement.freq_mhz*1e6, {'IP3':measurement.ip3_dbm}, ylabel='IP3 (dBm)',passed=evaluate_test7(measurement))
+            report_tools.add_chart(document, measurement.freq_mhz*1e6, {'SFDR':measurement.sfdr_db}, ylabel='SFDR (dB)',passed=evaluate_test7(measurement))

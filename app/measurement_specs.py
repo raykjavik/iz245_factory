@@ -1,4 +1,9 @@
-"""Descriptors separate procedure configuration from acquisition implementation."""
+"""Configuration needed to run, save and display each measurement."""
+
+from measurement import SweepMeasurement
+from measurement import NoiseDensityMeasurement
+from measurement import IP3Measurement
+from measurement import IFSpectrumMeasurement
 from dataclasses import dataclass
 import numpy as np
 
@@ -21,7 +26,6 @@ class SweepSpec:
 
     @property
     def measurement_class(self):
-        from measurement import SweepMeasurement
         return SweepMeasurement
 
     def work_units_for(self,settings):
@@ -41,43 +45,6 @@ class SweepSpec:
 
 
 @dataclass(frozen=True)
-class SpectrumSpec:
-    """General spectrum configuration; requires a registered spectrum handler.
-
-    This is deliberately separate from the (frequency axis, commands) sweep
-    format. ADC scaling, IQ capture and spectral acceptance criteria are not
-    inferred from a sweep or from the oscilloscope widget.
-    """
-    cw_hz: float
-    receiver_hz: float
-    sample_rate_hz: float
-    sample_count: int
-    commands: tuple[str, ...] = ()
-    power_dbm: float = -50.0
-    window: str = 'hann'
-    averages: int = 1
-    storage: str = 'tests'
-    kind: str = 'spectrum'
-    needs_generator: bool = True
-
-    @property
-    def measurement_class(self):
-        from measurement import SweepMeasurement
-        return SweepMeasurement
-
-    def work_units_for(self,settings):
-        return self.work_units
-
-    @property
-    def generator_frequencies(self):
-        return (self.cw_hz,)
-
-    @property
-    def work_units(self):
-        return self.averages
-
-
-@dataclass(frozen=True)
 class NoiseDensitySpec:
     carrier_hz: float
     commands: tuple[str, ...]
@@ -92,7 +59,6 @@ class NoiseDensitySpec:
 
     @property
     def measurement_class(self):
-        from measurement import NoiseDensityMeasurement
         return NoiseDensityMeasurement
 
     def work_units_for(self,settings):
@@ -117,7 +83,6 @@ class IP3Spec:
 
     @property
     def measurement_class(self):
-        from measurement import IP3Measurement
         return IP3Measurement
 
     def work_units_for(self, settings):
@@ -145,7 +110,6 @@ class IFSpectrumSpec:
 
     @property
     def measurement_class(self):
-        from measurement import IFSpectrumMeasurement
         return IFSpectrumMeasurement
 
     def work_units_for(self, settings):

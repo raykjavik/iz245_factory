@@ -3,20 +3,25 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMainWindow
 from helpers import LedTabWidget
-from prj_tab import ProjectTab
-from settings_tab import SettingsTab
+from tab_prj import ProjectTab
+from tab_settings import SettingsTab
 from measurement_toolbar import MeasurementToolbar
-from calib_tab import CalibrationTab, CalibrationVerificationTab, NoisePreselectorsTab, NoiseDensityTab
-from ip3_tab import IP3Tab
-from if_spectrum_tab import IFSpectrumTab
+from tab_calib import CalibrationTab
+from tab_test1 import CalibrationVerificationTab
+from tab_tests_2_3_4 import NoisePreselectorsTab
+from tab_tests_5_6 import NoiseDensityTab
+from tab_ip3 import IP3Tab
+from tab_if_spectrum import IFSpectrumTab
 from menu import ProjectMenu
 from controller import Controller
 import project as project_model
+from ui_style import BUTTON_STYLE
 
 
 class MainWindow(QMainWindow):
     def __init__(self, generator_factory=None, device_factory=None, ip3_generator_factory=None):
         super().__init__()
+        self.setStyleSheet(BUTTON_STYLE)
         self.resize(1440, 850)
         self.tabs = LedTabWidget()
         self.setCentralWidget(self.tabs)

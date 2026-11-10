@@ -1,5 +1,8 @@
 """Domain configuration, measurement procedure and report content."""
 
+from chart_ranges import clipped_curve
+import report_tools
+
 # Presentation only: acquired/stored values are never converted here.
 DISPLAY_UNIT = 'dBc/Hz'
 DISPLAY_OFFSET_DB = 0.0
@@ -120,21 +123,17 @@ REPORT_OFFSETS_HZ = (1e3, 1e4, 1e5, 1e6)
 
 
 def add_report(document, measurements):
-    from report_tools import (add_test_heading, add_measurement_heading, add_chart,
-                              add_table, no_measurements)
     for title, attribute, evaluate in (
         ('Test5 Phase noise density', 'phase_noise', evaluate_test5),
         ('Test6 Amplitude noise density', 'amplitude_noise', evaluate_test6),
     ):
-        add_test_heading(document, title,
+        report_tools.add_test_heading(document, title,
             'Single sideband noise density from overlapping IQ windows, averaged in linear density.')
         if not measurements:
-            no_measurements(document)
+            report_tools.no_measurements(document)
         for measurement in measurements:
-            add_measurement_heading(document, measurement,
+            report_tools.add_measurement_heading(document, measurement,
                 title=f'Carrier {measurement.carrier_hz/1e6:g} MHz', passed=evaluate(measurement))
-            document.add_paragraph(f'{measurement.ffts} FFT windows. '
-                f'Sample rate {measurement.sample_rate_hz:g} Hz. Overlap {measurement.overlap:g}.')
             if not measurement.has_data():
                 document.add_paragraph('The saved spectrum contains no complete data.')
                 continue
@@ -142,11 +141,10 @@ def add_report(document, measurements):
             if REPORT_TABLE:
                 indices = sorted({int(np.argmin(np.abs(measurement.offset_hz-f)))
                     for f in REPORT_OFFSETS_HZ if measurement.offset_hz[0] <= f <= measurement.offset_hz[-1]})
-                add_table(document, ['Measured offset (Hz)', f'Density ({DISPLAY_UNIT})'],
+                report_tools.add_table(document, ['Measured offset (Hz)', f'Density ({DISPLAY_UNIT})'],
                     [(measurement.offset_hz[i],values[i]) for i in indices])
             if REPORT_CHART:
-                from chart_ranges import clipped_curve
                 x, y = clipped_curve(measurement.offset_hz, values, PLOT_FREQUENCY_LIMITS_HZ, log_x=True)
-                add_chart(document, x, {'Measured': y},
+                report_tools.add_chart(document, x, {'Measured': y},
                           ylabel=f'Density ({DISPLAY_UNIT})', xlabel='Offset frequency (Hz)',
                           passed=evaluate(measurement),x_limits=PLOT_FREQUENCY_LIMITS_HZ)

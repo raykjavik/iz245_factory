@@ -1,4 +1,11 @@
 """Combine named template fields with Word sections authored in cfg_* modules."""
+
+from docx import Document
+from docx.shared import RGBColor
+from project_paths import CALIB_DIR, TEST_DIR
+from measurement import IFSpectrumMeasurement
+from project_paths import TEMPLATE_PATH
+from report_styles import copy_template_styles
 from dataclasses import asdict
 from pathlib import Path
 from io import BytesIO
@@ -23,9 +30,7 @@ def default_template(path):
     path = Path(path)
     if path.is_file():
         return DocxTemplate(path)
-    from docx import Document
     document = Document()
-    from docx.shared import RGBColor
     document.styles['Title'].font.color.rgb = RGBColor(0, 0, 0)
     for border in document.styles['Title'].element.xpath('.//w:pBdr'):
         border.getparent().remove(border)
@@ -42,8 +47,6 @@ def default_template(path):
 
 def load_measurements(project):
     """Read each saved file once. Domain report functions receive result objects."""
-    from project import CALIB_DIR, TEST_DIR
-    from measurement import IFSpectrumMeasurement
     def read(configs, result_class, directory):
         return [(filename, result_class.from_file(project.root/directory/filename))
                 for filename in configs if (project.root/directory/filename).is_file()]
@@ -130,7 +133,6 @@ def render_reports(project, *, template=None, template_path=None, output_path=No
     {{p generated_report }} in its own template paragraph selects insertion.
     Without that tag, generated sections are appended after template rendering.
     """
-    from project import TEMPLATE_PATH
     template = template if template is not None else default_template(template_path or TEMPLATE_PATH)
     groups = load_measurements(project)
     if sections is None:
@@ -153,7 +155,6 @@ def render_reports(project, *, template=None, template_path=None, output_path=No
         for attribute in ('page_width', 'page_height', 'left_margin', 'right_margin',
                           'top_margin', 'bottom_margin'):
             setattr(target, attribute, getattr(source, attribute))
-        from report_styles import copy_template_styles
         copy_template_styles(template.docx, subdocument)
         add_generated_sections(subdocument, groups, sections)
         context['generated_report'] = subdocument

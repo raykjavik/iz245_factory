@@ -5,25 +5,29 @@ Some tests require measured data only; others check numerical acceptance limits.
 Only True makes a verification LED green.
 """
 
+import cfg_test1
+import cfg_test2
+import cfg_test3
+import cfg_test4
+import cfg_test_5_6
+import cfg_test_7
+import cfg_test8
+
 
 def evaluate_test1(measurement):
-    from cfg_test1 import evaluate_test1 as evaluate
-    return evaluate(measurement)
+    return cfg_test1.evaluate_test1(measurement)
 
 
 def evaluate_test2(measurement):
-    from cfg_test2 import evaluate_test2 as evaluate
-    return evaluate(measurement)
+    return cfg_test2.evaluate_test2(measurement)
 
 
 def evaluate_test3(measurement):
-    from cfg_test3 import evaluate_test3 as evaluate
-    return evaluate(measurement)
+    return cfg_test3.evaluate_test3(measurement)
 
 
 def evaluate_test4(measurement):
-    from cfg_test4 import evaluate_test4 as evaluate
-    return evaluate(measurement)
+    return cfg_test4.evaluate_test4(measurement)
 
 
 def evaluate_verification(measurement):
@@ -44,20 +48,16 @@ def evaluate_verification(measurement):
 
 
 def evaluate_test5(measurement):
-    from cfg_test_5_6 import evaluate_test5 as evaluate
-    return evaluate(measurement)
+    return cfg_test_5_6.evaluate_test5(measurement)
 
 
 def evaluate_test6(measurement):
-    from cfg_test_5_6 import evaluate_test6 as evaluate
-    return evaluate(measurement)
+    return cfg_test_5_6.evaluate_test6(measurement)
 
 
 def evaluate_test7(measurement):
-    from cfg_test_7 import evaluate_test7 as evaluate
-    return evaluate(measurement)
+    return cfg_test_7.evaluate_test7(measurement)
 
 
 def evaluate_test8(measurement):
-    from cfg_test8 import evaluate_test8 as evaluate
-    return evaluate(measurement)
+    return cfg_test8.evaluate_test8(measurement)

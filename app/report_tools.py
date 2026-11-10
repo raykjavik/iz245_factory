@@ -1,4 +1,22 @@
 """Small Word/plot helpers. Domain modules decide content and presentation."""
+
+from docx.shared import RGBColor
+from report_styles import ensure_template_styles
+from docx.shared import Pt
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.ticker import EngFormatter, MaxNLocator
+from docx.shared import Inches
+from docx import Document
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from report_styles import copy_template_styles
+from matplotlib.ticker import LogLocator
+from matplotlib.ticker import FixedLocator
+from project_paths import TEMPLATE_PATH
 from io import BytesIO
 import numpy as np
 from chart_style import result_color, LIMIT_COLOR
@@ -10,7 +28,6 @@ REPORT_LEGEND_FONT_SIZE = 7
 
 
 def add_test_heading(document, title, description):
-    from docx.shared import RGBColor
     for name in ('Heading 2', 'Heading 3'):
         document.styles[name].font.color.rgb = RGBColor(0, 0, 0)
     document.add_heading(title, level=2)
@@ -23,28 +40,14 @@ def add_measurement_heading(document, measurement, *, title=None, passed=None):
     document.add_heading(title, level=3)
     state = 'Passed' if passed is True else 'Failed' if passed is False else 'Not evaluated'
     stamp = measurement.datetime or 'not recorded'
-    operator = measurement.operator or 'not recorded'
-    if hasattr(measurement,'dwell_sec'):
-        from report_styles import ensure_template_styles
-        ensure_template_styles(document,('Sweep Metadata',))
-        dwell = f'{measurement.dwell_sec:g} s' if measurement.dwell_sec is not None else 'not recorded'
-        bandwidth = f'{measurement.bandwidth_hz:g} Hz' if measurement.bandwidth_hz is not None else 'not recorded'
-        paragraph = document.add_paragraph(
-            f'{state} | UTC {stamp} | Operator {operator} | Dwell {dwell} | RBW {bandwidth}',
-            style='Sweep Metadata')
-    else:
-        paragraph = document.add_paragraph(f'{state}. Measured {stamp} UTC. Operator {operator}.')
+    ensure_template_styles(document,('Sweep Metadata',))
+    paragraph = document.add_paragraph(f'{state} | UTC {stamp}', style='Sweep Metadata')
     paragraph.paragraph_format.keep_with_next = True
 
 
 def add_table(document, headers, rows, *, style=None, text_style=None, header_style=None):
     if style is not None:
         return _add_template_table(document,headers,rows,style,text_style,header_style)
-    from docx.shared import Pt
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-    from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
     if document.paragraphs:
         document.paragraphs[-1].paragraph_format.keep_with_next = True
     table = document.add_table(rows=1, cols=len(headers))
@@ -86,12 +89,8 @@ def add_table(document, headers, rows, *, style=None, text_style=None, header_st
     return table
 
 
-def add_chart(document, x, series, *, ylabel, xlabel='Frequency (Hz)', log_x=True, limits=None, colors=None, y_padding=None, passed=None, x_limits=None, vertical_limits=None):
+def add_chart(document, x, series, *, ylabel, xlabel='Frequency (Hz)', log_x=True, limits=None, colors=None, y_padding=None, passed=None, x_limits=None, vertical_limits=None, x_ticks=None):
     """series maps legend labels to arrays. Export a static plot, not Qt widgets."""
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from matplotlib.ticker import EngFormatter, MaxNLocator
-    from docx.shared import Inches
     figure = Figure(figsize=(6.2, 2.8), dpi=180, layout='constrained')
     FigureCanvasAgg(figure)
     axis = figure.add_subplot()
@@ -126,7 +125,6 @@ def add_chart(document, x, series, *, ylabel, xlabel='Frequency (Hz)', log_x=Tru
     for position in vertical_limits or ():
         axis.axvline(position,color=LIMIT_COLOR,linestyle='--',linewidth=.8)
     if x_limits is not None:
-        from matplotlib.ticker import LogLocator
         if log_x:
             axis.xaxis.set_major_locator(LogLocator(base=10,subs=(1.,)))
         axis.xaxis.set_major_formatter(EngFormatter(unit='Hz',sep=''))
@@ -141,6 +139,13 @@ def add_chart(document, x, series, *, ylabel, xlabel='Frequency (Hz)', log_x=Tru
             padding = Y_MARGIN if y_padding is None else y_padding
             margin = (high-low)*padding
             axis.set_ylim(low-margin, high+margin)
+    if x_ticks is not None:
+        # Set the locator after the data bounds; set_xticks would expand xlim.
+        low, high = axis.get_xlim()
+        visible_ticks = [tick for tick in x_ticks if low <= tick <= high]
+        if visible_ticks:
+            axis.xaxis.set_major_locator(FixedLocator(visible_ticks))
+            axis.xaxis.set_major_formatter(EngFormatter(sep=''))
     if len(series) > 1:
         axis.legend(fontsize=REPORT_LEGEND_FONT_SIZE)
     buffer = BytesIO()
@@ -152,7 +157,6 @@ def add_chart(document, x, series, *, ylabel, xlabel='Frequency (Hz)', log_x=Tru
         document.paragraphs[-1].paragraph_format.keep_with_next = True
     picture = document.add_picture(buffer, width=width)
     picture._inline.docPr.set('descr', f'{ylabel} versus {xlabel}')
-    from docx.shared import Pt
     document.paragraphs[-1].paragraph_format.space_after = Pt(12)
     return buffer
 
@@ -164,12 +168,7 @@ def no_measurements(document):
 
 def _add_template_table(document, headers, rows, style, text_style, header_style):
     """Typography, colors, borders and cell padding come only from template styles."""
-    from docx import Document
-    from docx.oxml import OxmlElement
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    from report_styles import copy_template_styles
     if any(name not in document.styles for name in (style,text_style,header_style)):
-        from project import TEMPLATE_PATH
         copy_template_styles(Document(TEMPLATE_PATH), document, replace=False)
     table = document.add_table(rows=1,cols=len(headers))
     table.style = style

@@ -2,6 +2,9 @@
 
 Raw arrays and CSV files are never modified by display-unit conversion.
 """
+
+from PySide6.QtGui import QFontMetricsF
+from PySide6.QtGui import QColor
 from dataclasses import dataclass
 from html import escape
 import os
@@ -35,7 +38,6 @@ class LimitedLabelAxis(pg.AxisItem):
         return f'{value:.5g}'
 
     def tickValues(self,minVal,maxVal,size):
-        from PySide6.QtGui import QFontMetricsF
         generated=super().tickValues(minVal,maxVal,size)
         # Log-axis minor levels may repeat decade ticks from the major level.
         levels=[]
@@ -299,7 +301,6 @@ class SweepChart(QtWidgets.QWidget):
             if index < len(APP_CURVE_COLORS):
                 color = APP_CURVE_COLORS[index]
             else:
-                from PySide6.QtGui import QColor
                 color = QColor.fromHsvF((index*.61803398875) % 1., .75, .65).name()
             self._curve_colors[key] = color
         return self._curve_colors[key]
@@ -330,7 +331,7 @@ class SweepChart(QtWidgets.QWidget):
         for label, value in limits:
             line = pg.InfiniteLine(pos=value,angle=0,movable=False,
                 pen=pg.mkPen(LIMIT_COLOR,width=1.2,style=QtCore.Qt.PenStyle.DashLine),
-                label=label,labelOpts={'position':.98,'anchors':[(1,1),(1,0)],'color':LIMIT_COLOR})
+                label=label,labelOpts={'position':.98,'anchors':[(1,0),(1,1)],'color':LIMIT_COLOR})
             self.plot.addItem(line)
             self._limit_items.append(line)
         self._autoscale_visible_y()

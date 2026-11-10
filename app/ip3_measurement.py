@@ -1,7 +1,8 @@
-"""Two-tone generator transport adapter and compatibility acquisition entry point."""
+"""SMATE200A two-RF-path transport."""
+from generator_connection import default_generator_factory
 
 class TwoToneGenerator:
-    """Wrap the current SMA1000B transport; a later driver can implement this interface."""
+    """Legacy adapter for caller-supplied two-tone SCPI command templates."""
     def __init__(self, transport, commands):
         if not commands:
             raise NotImplementedError(
@@ -19,11 +20,6 @@ class TwoToneGenerator:
 
 
 def default_ip3_generator_factory(ip, port):
-    # The domain now defines actual SOURCE1/SOURCE2 commands directly.
-    from calib_tab import default_generator_factory
+    # SMATE200A uses the same RSGenerator SCPI socket transport. Its model-specific
+    # reference and two-path commands live in the Qt-free cfg_test_7 procedure.
     return default_generator_factory(ip, port)
-
-
-def measure_ip3(controller, name, spec, dwell):
-    from measurement_handlers import measure_ip3 as acquire
-    return acquire(controller, name, spec, dwell)

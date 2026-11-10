@@ -1,4 +1,7 @@
 """Copy Word styles from the selected template, including generated subdocuments."""
+
+from docx import Document
+from project_paths import TEMPLATE_PATH
 from copy import deepcopy
 from docx.oxml.ns import qn
 
@@ -23,6 +26,4 @@ def copy_template_styles(source, target, *, replace=True):
 
 def ensure_template_styles(document, names):
     if any(name not in document.styles for name in names):
-        from docx import Document
-        from project import TEMPLATE_PATH
         copy_template_styles(Document(TEMPLATE_PATH),document,replace=False)

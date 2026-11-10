@@ -1,4 +1,6 @@
 """Shared receiver SCPI constants and frequency axes. No application dependencies."""
+
+import re
 import numpy as np
 import math
 
@@ -89,7 +91,6 @@ _RSOC_OUT = "ROSC:SOUR OUT"
 
 def sweep_bandwidth_hz(commands):
     """Final configured BAND/RBW in Hz; None if not specified in this sweep."""
-    import re
     bandwidth = None
     for command in commands:
         for part in command.split(';'):

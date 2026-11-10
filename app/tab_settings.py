@@ -73,7 +73,7 @@ class SettingsTab(QWidget):
         self.dwells['verification_dwell_sec'].setToolTip(
             'Other verification tests; Test7 uses its own noise and P / IM3 dwell times.')
         self.levels['ip3_attenuator_db'].setToolTip(
-            'Test7 path loss only, applied to both generator channel offsets. '
+            'Test7 static path loss only, added to both generator channel power set points. '
             'Other tests use the general attenuator setting.')
         cable_row=QHBoxLayout()
         self.cable_path=QLineEdit()
@@ -138,7 +138,7 @@ class SettingsTab(QWidget):
         cable=card('Cable calibration',2,0,2)
         lan.addRow('DUT IP',self.fields['dut_ip'])
         for label,name,port in (('Generator IP','generator_ip',self.generator_port),
-                                ('Test7 generator IP','ip3_generator_ip',self.ip3_generator_port)):
+                                ('Test7 SMATE200A IP','ip3_generator_ip',self.ip3_generator_port)):
             row=QHBoxLayout();row.addWidget(self.fields[name],1);row.addWidget(QLabel('Port'))
             port.setMaximumWidth(100);row.addWidget(port);lan.addRow(label,row)
         lan.addRow('',self.connect_button)

@@ -5,6 +5,8 @@ Inject device_factory(ip) for simulated hardware.
 All device I/O runs in a QThread. Project mutations and notifications run on
 Qt's GUI thread after the device has been closed.
 """
+
+from capture_device import CaptureDevice
 from collections.abc import Mapping
 from dataclasses import replace
 from ipaddress import ip_address
@@ -12,7 +14,6 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 
 def default_device_factory(ip):
-    from capture_device import CaptureDevice
     return CaptureDevice(ip=ip)
 
 

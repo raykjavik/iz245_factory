@@ -99,6 +99,10 @@ class JobFactory:
     def upload(name):
         return MeasurementJob('upload','upload',single_name=name,needs_transfer=True,fixed_work=1)
     @staticmethod
+    def upload_all(name=None):
+        return MeasurementJob('upload_all','run_upload_all',needs_transfer=True,
+            fixed_work=len(CFG_CALIB_RF1)+len(CFG_PCALIB)+len(CFG_CALIB_RF2))
+    @staticmethod
     def download(name):
         return MeasurementJob('download','download',single_name=name,needs_transfer=True,fixed_work=1)
     @staticmethod

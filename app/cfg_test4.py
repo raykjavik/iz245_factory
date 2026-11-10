@@ -1,4 +1,5 @@
 """Domain configuration, measurement procedure and report content."""
+import report_tools
 
 # Presentation only: acquired/stored values are never converted here.
 from cfg_common import DBM_TO_DBUV_50_OHM
@@ -69,20 +70,18 @@ REPORT_TABLE = False
 
 def add_report(document, measurements):
     """Append Heading 2, description, then Heading 3 and content per measurement."""
-    from report_tools import (add_test_heading, add_measurement_heading, add_chart,
-                              add_table, no_measurements)
-    add_test_heading(document, REPORT_TITLE, REPORT_DESCRIPTION)
+    report_tools.add_test_heading(document, REPORT_TITLE, REPORT_DESCRIPTION)
     if not measurements:
-        no_measurements(document)
+        report_tools.no_measurements(document)
     for measurement in measurements:
-        add_measurement_heading(document, measurement, passed=evaluate_test4(measurement))
+        report_tools.add_measurement_heading(document, measurement, passed=evaluate_test4(measurement))
         if not measurement.has_data():
             document.add_paragraph('The saved measurement contains no complete data.')
             continue
         display_values = np.asarray(measurement.limit_dB) + DISPLAY_OFFSET_DB
         if REPORT_TABLE:
-            add_table(document, ['Frequency (Hz)', f'Value ({DISPLAY_UNIT})'],
+            report_tools.add_table(document, ['Frequency (Hz)', f'Value ({DISPLAY_UNIT})'],
                       zip(measurement.freq_hz, display_values))
         if REPORT_CHART:
-            add_chart(document, measurement.freq_hz, {'Measured': display_values},
+            report_tools.add_chart(document, measurement.freq_hz, {'Measured': display_values},
                       ylabel=f'Level ({DISPLAY_UNIT})',passed=evaluate_test4(measurement))

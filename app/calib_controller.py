@@ -1,12 +1,17 @@
-"""Synchronous calibration backend; CalibrationTab runs it in a worker thread."""
+"""Measurement backend: explicit cfg_* procedure calls, run by the Qt worker."""
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 import threading
-import numpy as np
-from cfg_common import sweep_bandwidth_hz
+import cfg_calib
+import cfg_test1
+import cfg_test2
+import cfg_test3
+import cfg_test4
+import cfg_test_5_6
+import cfg_test_7
+import cfg_test8
 from cfg import CFG_CALIB_RF1, CFG_PCALIB, CFG_CALIB_RF2,CFG_TEST1_RF1,CFG_TEST2,CFG_TEST1_RF2,CFG_TEST2_RF2,CFG_TEST3,CFG_TEST4,CFG_NOISE_DENSITY,MEASUREMENT_SPECS
-from measurement import SweepMeasurement,NoiseDensityMeasurement,IP3Measurement,IFSpectrumMeasurement
+from measurement import SweepMeasurement
 from cfg_test8 import CFG_TEST8
 from cfg import CFG_TEST7_RF1, CFG_TEST7_RF2
 from measurement_jobs import make_job
@@ -14,8 +19,6 @@ from measurement_control import Aborted, check_abort
 from ssh_transfer import RemoteFileMissing
 from project import CALIB_DIR, TEST_DIR
 from run_control import pause_checkpoint
-from measurement_handlers import HANDLERS
-from measurement_specs import CALIB_POWER, VERIFICATION_POW, NOISE_UNIT
 
 CFG_CALIB_ALL = {**CFG_CALIB_RF1, **CFG_PCALIB, **CFG_CALIB_RF2}
 CFG_TEST1_ALL = {**CFG_TEST1_RF1, **CFG_TEST1_RF2}
@@ -31,13 +34,12 @@ def measured(measurement):
 
 class MeasurementController:
     def __init__(self, dev, gen, prj, *, dwell_sec=None, operator=None,
-                 calibration_dwell_sec=None, verification_dwell_sec=None, handlers=None,
+                 calibration_dwell_sec=None, verification_dwell_sec=None,
                  transfer=None, cancel=None, progress=None, completed=None, status=None, warning=None,
                  measurement_started=None, point_measured=None, density_updated=None,
                  pause_event=None, pause_changed=None, ip3_updated=None,
                  measurement_names=None, load_existing=True, spectrum_updated=None):
         self._dev, self.gen, self.prj = dev, gen, prj
-        self.handlers = {**HANDLERS, **(handlers or {})}
         settings = prj.settings
         self.calibration_dwell_sec = (calibration_dwell_sec if calibration_dwell_sec is not None
                                       else dwell_sec if dwell_sec is not None else settings.calibration_dwell_sec)
@@ -121,9 +123,6 @@ class MeasurementController:
         setting = getattr(spec, 'power_setting', None)
         return replace(spec, power_dbm=getattr(self.prj.settings, setting)) if setting else spec
 
-    def register_handler(self, kind, handler):
-        self.handlers[kind] = handler
-
     def record_point(self, name, frequency, value):
         self.point_measured(name, float(frequency), float(value))
         self._advance()
@@ -135,22 +134,98 @@ class MeasurementController:
                  else self.verification_dwell_sec)
         self.measurement_started(name)
         self.status(f'Measuring {name}')
-        # Each domain function owns its setup and procedure.
-        if spec.kind == 'spectrum':
-            # Retain setup for the existing custom spectrum-handler extension.
-            self.dev._main_scpi_commands(list(spec.commands))
-        result = self.handlers[spec.kind](self, name, spec, dwell)
+        # Explicit entry points keep each test's arguments visible in one place.
+        match spec.kind:
+            case 'calibration':
+                cm = self.measure_calibration(name, spec, dwell)
+            case 'test1':
+                cm = self.measure_test1(name, spec, dwell)
+            case 'test2':
+                cm = self.measure_test2(name, spec, dwell)
+            case 'test3':
+                cm = self.measure_test3(name, spec, dwell)
+            case 'test4':
+                cm = self.measure_test4(name, spec, dwell)
+            case 'noise_density':
+                cm = self.measure_tests5_6(name, spec, dwell)
+            case 'ip3':
+                cm = self.measure_test7(name, spec, dwell)
+            case 'if_spectrum':
+                cm = self.measure_test8(name, spec, dwell)
+            case _:
+                raise ValueError(f'Unsupported measurement kind: {spec.kind}')
         self._checkpoint()
-        cm = result if isinstance(result, (SweepMeasurement,NoiseDensityMeasurement,IP3Measurement,IFSpectrumMeasurement)) else SweepMeasurement(
-            name=Path(name).stem, freq_hz=np.asarray(spec.frequencies).copy(),
-            limit_dB=np.asarray(result), datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
-            operator=self.operator, temperature=self.prj.prop_auto.calibration_temperature,
-            unit=spec.unit,
-            reference_dbm=spec.power_dbm,dwell_sec=dwell,
-            bandwidth_hz=sweep_bandwidth_hz(spec.commands))
         self.status(f'Saving {name}')
         self._save(name, cm)
         self._publish(name, cm)
+
+    def check_cancel(self):
+        check_abort(self.cancel)
+
+    def measure_calibration(self, name, spec, dwell):
+        return cfg_calib.measure_calibration(self.dev, self.gen, spec.frequencies, spec.commands,
+            name=name, dwell_sec=dwell,
+            target_power_dbm=spec.power_dbm, attenuator_db=self.prj.settings.attenuator_db,
+            operator=self.operator, temperature=self.prj.prop_auto.calibration_temperature,
+            checkpoint=self._checkpoint, wait=self.wait,
+            on_row=lambda frequency, value: self.record_point(name, frequency, value))
+
+    def measure_test1(self, name, spec, dwell):
+        return cfg_test1.measure_test1(self.dev, self.gen, spec.frequencies, spec.commands,
+            name=name, dwell_sec=dwell,
+            target_power_dbm=spec.power_dbm, attenuator_db=self.prj.settings.attenuator_db,
+            operator=self.operator, temperature=self.prj.prop_auto.calibration_temperature,
+            checkpoint=self._checkpoint, wait=self.wait,
+            on_row=lambda frequency, value: self.record_point(name, frequency, value))
+
+    def measure_test2(self, name, spec, dwell):
+        return cfg_test2.measure_test2(self.dev, spec.frequencies, spec.commands,
+            name=name, dwell_sec=dwell,
+            operator=self.operator, temperature=self.prj.prop_auto.calibration_temperature,
+            checkpoint=self._checkpoint, wait=self.wait,
+            check_cancel=self.check_cancel,
+            on_row=lambda frequency, value: self.record_point(name, frequency, value))
+
+    def measure_test3(self, name, spec, dwell):
+        return cfg_test3.measure_test3(self.dev, self.gen, spec.frequencies, spec.commands,
+            name=name, dwell_sec=dwell, target_power_dbm=spec.power_dbm,
+            attenuator_db=self.prj.settings.attenuator_db,
+            operator=self.operator, temperature=self.prj.prop_auto.calibration_temperature,
+            checkpoint=self._checkpoint, 
+            on_row=lambda frequency, value: self.record_point(name, frequency, value))
+
+    def measure_test4(self, name, spec, dwell):
+        return cfg_test4.measure_test4(self.dev, spec.frequencies, spec.commands,
+            name=name, dwell_sec=dwell,
+            operator=self.operator, temperature=self.prj.prop_auto.calibration_temperature,
+            checkpoint=self._checkpoint,
+            on_row=lambda frequency, value: self.record_point(name, frequency, value))
+
+    def measure_tests5_6(self, name, spec, dwell):
+        return cfg_test_5_6.measure_tests5_6(self.dev, self.gen, spec,
+            name=name, dwell_sec=dwell, fft_count=self.prj.settings.noise_ffts,
+            attenuator_db=self.prj.settings.attenuator_db,
+            operator=self.operator, temperature=self.prj.prop_auto.calibration_temperature,
+            checkpoint=self._checkpoint, wait=self.wait, check_cancel=self.check_cancel,
+            on_spectrum=lambda result: self.density_updated(name, result),
+            on_progress=self._advance, on_status=self.status)
+
+    def measure_test7(self, name, spec, dwell):
+        return cfg_test_7.measure_test7(self.dev, self.gen, spec, name=name,
+            noise_dwell_sec=self.prj.settings.ip3_noise_dwell_sec,
+            signal_dwell_sec=self.prj.settings.ip3_signal_dwell_sec,
+            headroom_db=self.prj.settings.ip3_headroom_db,
+            attenuator_db=self.prj.settings.ip3_attenuator_db,
+            operator=self.operator, temperature=self.prj.prop_auto.calibration_temperature,
+            checkpoint=self._checkpoint, check_cancel=self.check_cancel, wait=self.wait,
+            on_row=lambda result: self.ip3_updated(name, result), on_progress=self._advance)
+
+    def measure_test8(self, name, spec, dwell):
+        return cfg_test8.measure_test8(self.dev, spec, name=name, dwell_sec=dwell,
+            operator=self.operator, temperature=self.prj.prop_auto.calibration_temperature,
+            checkpoint=self._checkpoint, wait=self.wait, check_cancel=self.check_cancel,
+            on_spectrum=lambda result: self.spectrum_updated(name, result),
+            on_progress=self._advance, on_status=self.status)
 
     def wait(self, seconds):
         if self.cancel.wait(seconds):
@@ -296,6 +371,16 @@ class MeasurementController:
             except RemoteFileMissing as exc:
                 self.warning(str(exc)+' — skipped; existing local data kept.')
                 self._advance()
+
+    def run_upload_all(self,_name=None):
+        """Upload available project calibration files; skip missing local files."""
+        for name in CFG_CALIB_ALL:
+            self._checkpoint()
+            if not self.path(name).is_file():
+                self.warning(f'{name} missing locally — skipped.')
+                self._advance()
+                continue
+            self.upload(name)
 
     def run(self,action,name=None):
         job=make_job(action,name)

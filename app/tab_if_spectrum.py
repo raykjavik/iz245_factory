@@ -1,7 +1,7 @@
 """Test8 controls and a signed-frequency spectrum chart."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTableWidgetItem,QHeaderView
-from calib_tab import CalibrationTab
+from tab_calib import CalibrationTab
 import cfg_test8 as test8_cfg
 from sweep_chart import SweepChart, Trace
 from spectrum_display import max_envelope

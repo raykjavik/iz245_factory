@@ -120,10 +120,11 @@ def add_report(document, measurements):
     if not measurements:
         no_measurements(document)
     for measurement in measurements:
+        title = f'IF filter {measurement.if_bandwidth_hz/1e6:g} MHz' if measurement.if_bandwidth_hz>1e6 else f'IF filter {measurement.if_bandwidth_hz/1e3:g} kHz' 
         add_measurement_heading(document,measurement,
-            title=f'IF filter {measurement.if_bandwidth_hz/1e6:g} MHz',passed=evaluate_test8(measurement))
+            title=title,passed=evaluate_test8(measurement))
         document.add_paragraph(f'{measurement.ffts} windows of {measurement.window_samples} samples. '
-            f'Overlap {measurement.overlap:g}. Sample rate {measurement.sample_rate_hz:g} Hz. '
+            f'Overlap {measurement.overlap:g}. Sample rate {measurement.sample_rate_hz/1e6:.3f} MHz. '
             + ('RMS level in each Hann resolution bandwidth, calibrated from the receiver header.'
                if measurement.unit == 'dBm' else 'Legacy spectrum; original saved units retained.'))
         if not measurement.has_data():

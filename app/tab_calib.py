@@ -1,10 +1,12 @@
 """Calibration controls, threaded hardware work, and frequency plots."""
+
+import cfg_test2
+import cfg_test3
 from pathlib import Path
 from dataclasses import replace
 import logging
 from datetime import datetime, timezone
 import threading
-import socket
 import numpy as np
 from PySide6.QtCore import Qt, QThread, Signal, QSignalBlocker
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -20,28 +22,12 @@ from calib_controller import (MeasurementController as CalibrationController,
 from measurement_jobs import make_job
 from cfg import CFG_NOISE_DENSITY, CFG_TEST7_RF1, CFG_TEST7_RF2
 from cfg_test8 import CFG_TEST8
-import cfg_test_5_6 as density_cfg
 from ssh_transfer import TransferSettings, SSHTransfer
 from measurement_control import Aborted, check_abort
 from controller import default_device_factory
+from generator_connection import default_generator_factory
+from ip3_measurement import default_ip3_generator_factory
 import connection_cfg as connections
-
-
-def default_generator_factory(ip, port):
-    from iz245.device import RSGenerator
-    class ConfiguredGenerator(RSGenerator):
-        def open(self, tdoa_setting=False):
-            # The supplied RSGenerator.open ignores self.port.
-            with self.scpi_lock:
-                self.close()
-                try:
-                    self.main_scpi = socket.create_connection((self.ip, self.port), timeout=10)
-                    self.connected = True
-                    return True
-                except OSError:
-                    self.close()
-                    return False
-    return ConfiguredGenerator(ip, port=port)
 
 
 class _CalibrationThread(QThread):
@@ -85,7 +71,7 @@ class _CalibrationThread(QThread):
             backend = CalibrationController(None, None, self.project,
                 calibration_dwell_sec=options['calibration_dwell'],
                 verification_dwell_sec=options['verification_dwell'],
-                operator=options['operator'], transfer=transfer, handlers=options.get('handlers'),
+                operator=options['operator'], transfer=transfer,
                 cancel=self.cancel, progress=self.progress.emit,
                 completed=self.completed.emit, status=self.status.emit, warning=self._warn,
                 measurement_started=self.measurement_started.emit, point_measured=self.point_measured.emit, density_updated=self.density_updated.emit,
@@ -98,7 +84,6 @@ class _CalibrationThread(QThread):
                 factory = self.generator_factory
                 ip, port = options['generator_ip'], options['generator_port']
                 if job.generator_role == 'ip3':
-                    from ip3_measurement import default_ip3_generator_factory
                     factory = self.ip3_generator_factory or default_ip3_generator_factory
                     ip, port = self.project.settings.ip3_generator_ip, self.project.settings.ip3_generator_port
                     if not ip:
@@ -207,9 +192,10 @@ class CalibrationTab(QWidget):
         self.preselectors.setVisible(mode=='calibration')
         self.preselectors.clicked.connect(lambda:self.start('measure_preselectors'))
         self.download_all = QPushButton('Download All')
+        self.upload_all = QPushButton('Upload all calibrations')
         self.test4 = QPushButton('Run Test4 · internal source')
         self.test4.setVisible(mode == 'noise')
-        for button in (self.ch1, self.preselectors, self.ch2, self.download_all, self.test4):
+        for button in (self.ch1, self.preselectors, self.ch2, self.upload_all, self.download_all, self.test4):
             top.addWidget(button)
         top.addStretch()
         self.show_all_button = QPushButton('Show all')
@@ -225,6 +211,8 @@ class CalibrationTab(QWidget):
         self.ch2.clicked.connect(lambda: self.start(
             {'calibration': 'measure_calibrations_rf2', 'test1': 'test1_rf2', 'noise': 'noise_rf2', 'density':'noise_density', 'ip3':'test7_rf2','if_spectrum':'test8'}[self.mode]))
         self.download_all.setVisible(mode == 'calibration')
+        self.upload_all.setVisible(mode == 'calibration')
+        self.upload_all.clicked.connect(lambda:self.start('upload_all'))
         self.download_all.clicked.connect(lambda: self.start('download_all'))
         self.test4.clicked.connect(lambda: self.start('test4'))
         self.cable_status = QLabel()
@@ -237,6 +225,7 @@ class CalibrationTab(QWidget):
             'Connect the generator to the selected RF input. Each RF pipeline stops before a cable switch.'
             if mode != 'noise' else
             'Connect the termination resistor to the selected RF input. No generator commands are sent.')
+        self.connection_hint.setWordWrap(True)
         layout.addWidget(self.connection_hint)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.columns = (['Name', 'Available', 'Date', 'Time (local)', 'Operator',
@@ -245,6 +234,7 @@ class CalibrationTab(QWidget):
         self.table = QTableWidget(0, len(self.columns))
         self.table.setHorizontalHeaderLabels(self.columns)
         self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(36)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -413,6 +403,8 @@ class CalibrationTab(QWidget):
         self.ch2.setEnabled(bool(measure_enabled))
         self.preselectors.setEnabled(bool(measure_enabled))
         self.download_all.setEnabled(enabled)
+        self.upload_all.setEnabled(enabled and self.mode == 'calibration' and
+            any(measured(value) for value in self.backend.measurements.values()))
         self.test4.setEnabled(enabled)
         self.control_state_changed.emit()
         for name, row in self.rows.items():
@@ -610,7 +602,8 @@ class CalibrationTab(QWidget):
 
     def _live_measurement(self,name,points,spec):
         return SweepMeasurement(name=Path(name).stem,freq_hz=points[:,0],limit_dB=points[:,1],
-            unit=spec.unit,reference_dbm=spec.power_dbm,available=True)
+            unit=spec.unit,reference_dbm=spec.power_dbm,available=True,
+            quantity='noise_density' if spec.kind == 'test2' else '')
 
     def _add_trace_with_reference(self, traces, label, trace, name, measurement_class, build_reference):
         """Add one project/live curve and at most one GUI-only reference overlay."""
@@ -632,10 +625,16 @@ class CalibrationTab(QWidget):
                                     color=trace.color, passed=None)
 
     def _sweep_reference(self, reference, spec):
+        if spec.kind == 'test2':
+            return Trace(np.asarray(reference.freq_hz),cfg_test2.noise_figure_density(reference),'dB/Hz',None,
+                display_unit=cfg_test2.DISPLAY_UNIT,display_offset_db=0.)
+        if spec.kind == 'test3':
+            return Trace(np.asarray(reference.freq_hz),cfg_test3.absolute_dbm(reference),'dBm',reference.reference_dbm,
+                display_unit=cfg_test3.DISPLAY_UNIT,display_offset_db=cfg_test3.DISPLAY_OFFSET_DB)
         return Trace(np.asarray(reference.freq_hz), np.asarray(reference.limit_dB), reference.unit,
             reference.reference_dbm, display_unit=spec.display_unit, display_offset_db=spec.display_offset_db)
 
-    def redraw(self, *_):
+    def _sweep_traces(self):
         traces = {}
         if self.backend:
             for name,row in self.rows.items():
@@ -646,9 +645,13 @@ class CalibrationTab(QWidget):
                 if reference is None:
                     reference = self.backend.spec_for(name).power_dbm
                 spec=self.backend.spec_for(name)
-                trace = Trace(np.asarray(cm.freq_hz),np.asarray(cm.limit_dB),cm.unit,reference,
-                                     display_unit=spec.display_unit,display_offset_db=spec.display_offset_db,
-                                     passed=self._curve_passed(name,cm))
+                try:
+                    trace = self._sweep_reference(cm,spec)
+                except ValueError as exc:
+                    logging.getLogger(__name__).warning('Cannot plot %s: %s',name,exc)
+                    continue
+                trace.passed=self._curve_passed(name,cm)
+                trace.reference_dbm=reference
                 self._add_trace_with_reference(traces,name,trace,name,SweepMeasurement,
                     lambda ref:self._sweep_reference(ref,spec))
         if self._show_live and self._live_name and self._live_points:
@@ -659,218 +662,7 @@ class CalibrationTab(QWidget):
                 passed=self._curve_passed(self._live_name,self._live_measurement(self._live_name,points,spec)))
             self._add_trace_with_reference(traces,'Current: '+self._live_name,trace,self._live_name,
                 SweepMeasurement,lambda ref:self._sweep_reference(ref,spec))
-        self.sweep_chart.set_traces(traces)
+        return traces
 
-
-class CalibrationVerificationTab(CalibrationTab):
-    """Test1 absolute-level chart; detailed result matrices are report-only."""
-    def __init__(self, parent=None, generator_factory=None, verification_check=None, device_factory=None, ip3_generator_factory=None):
-        super().__init__(parent, generator_factory, verification_check=verification_check, device_factory=device_factory, mode='test1')
-        import cfg_test1 as test1
-        self.sweep_chart.display_unit = test1.DISPLAY_UNIT
-        self.sweep_chart.display_offset_db = test1.DISPLAY_OFFSET_DB
-        self.sweep_chart.value_label = 'RMS received level'
-        self.sweep_chart.title = 'Test1 calibration verification'
-        self.sweep_chart.scale.setCurrentText('Log' if test1.CHART_LOG_X else 'Linear')
-        self.sweep_chart.scale.hide()  # Axis convention is shared with the protocol.
-        self.redraw()
-
-    def setup_changed(self):
-        super().setup_changed()
-        self.redraw()
-
-    def _on_completed(self,name,result):
-        super()._on_completed(name,result)
-        if name in self.rows:
-            self.rows[name]['show'].setChecked(self._show_live)
-
-    def redraw(self,*_):
-        import cfg_test1 as test1
-        traces, references = {}, set()
-        def reference_trace(measurement):
-            return Trace(np.asarray(measurement.freq_hz),test1.absolute_dbm(measurement),'dBm',
-                measurement.reference_dbm,display_unit=test1.DISPLAY_UNIT,display_offset_db=test1.DISPLAY_OFFSET_DB)
-        if self.backend:
-            for name,row in self.rows.items():
-                measurement = self.backend.measurements[name]
-                if not row['show'].isChecked() or not measured(measurement):
-                    continue
-                try:
-                    values = test1.absolute_dbm(measurement)
-                except ValueError:
-                    continue
-                label = test1.configuration_label(name).replace('\n', ', ')+(' · RF1' if '_RF1_' in name else ' · RF2')
-                trace = Trace(
-                    np.asarray(measurement.freq_hz),values,'dBm',measurement.reference_dbm,
-                    display_unit=test1.DISPLAY_UNIT,display_offset_db=test1.DISPLAY_OFFSET_DB,
-                    passed=self._curve_passed(name,measurement))
-                self._add_trace_with_reference(traces,label,trace,name,SweepMeasurement,reference_trace)
-                if measurement.reference_dbm is not None:
-                    references.add(measurement.reference_dbm)
-            if self._show_live and self._live_name and self._live_points:
-                points = np.asarray(self._live_points)
-                reference = self.backend.spec_for(self._live_name).power_dbm
-                references.add(reference)
-                label = 'Current: '+test1.configuration_label(self._live_name).replace('\n', ', ')
-                trace = Trace(
-                    points[:,0],points[:,1],'dBm',reference,live=True,
-                    display_unit=test1.DISPLAY_UNIT,display_offset_db=test1.DISPLAY_OFFSET_DB,
-                    passed=self._curve_passed(self._live_name,self._live_measurement(
-                        self._live_name,points,self.backend.spec_for(self._live_name))))
-                self._add_trace_with_reference(traces,label,trace,self._live_name,SweepMeasurement,reference_trace)
-            if not references and self.project is not None:
-                references.add(self.project.settings.verification_power_dbm)
-        self.sweep_chart.set_traces(traces)
-        limits = []
-        for reference in sorted(references):
-            for label,bound in zip(('Lower','Upper'),test1.limits_dbm(reference)):
-                value = bound+test1.DISPLAY_OFFSET_DB
-                limits.append((f'{label} {value:.2f} dBµV',value))
-        self.sweep_chart.set_limits(limits)
-
-
-class NoisePreselectorsTab(CalibrationTab):
-    def __init__(self, parent=None, generator_factory=None, verification_check=None, device_factory=None, ip3_generator_factory=None):
-        super().__init__(parent, generator_factory, verification_check=verification_check, device_factory=device_factory, mode='noise')
-        self.ch1.setText('Run Test2 RF1')
-        self.ch2.setText('Run Test2 RF2')
-        self.test3_button = QPushButton('Run Test3 preselectors')
-        self.layout().itemAt(0).layout().insertWidget(2,self.test3_button)
-        self.test3_button.clicked.connect(lambda:self.start('test3_rf1'))
-        self.connection_hint.setText('Test2: terminate the selected RF input in 50 Ω. '
-            'Test3: connect the generator to RF1. Run these separately after changing the connection.')
-        self._update_enabled()
-
-    def _update_enabled(self):
-        super()._update_enabled()
-        if hasattr(self,'test3_button'):
-            self.test3_button.setEnabled(self.project is not None and not self.busy and not self._external_busy
-                and not getattr(self.project,'cable_calib_error',''))
-
-    def _verification_result(self,measurement):
-        if measurement.name.startswith(('TEST2_','TEST4')):
-            passed = bool(measurement.available)
-            return passed, 'Measurement exists; no level threshold' if passed else 'Measurement missing'
-        return super()._verification_result(measurement)
-
-    def setup_changed(self):
-        super().setup_changed()
-        self.redraw()
-
-    def redraw(self,*_):
-        super().redraw()
-        from cfg_test3 import limit_dbm, DISPLAY_OFFSET_DB
-        references = set()
-        if self.backend:
-            for name,row in self.rows.items():
-                cm = self.backend.measurements[name]
-                if name.startswith('TEST3_') and row['show'].isChecked() and measured(cm) and cm.reference_dbm is not None:
-                    references.add(cm.reference_dbm)
-            if self._show_live and self._live_name and self._live_name.startswith('TEST3_'):
-                references.add(self.backend.spec_for(self._live_name).power_dbm)
-        limits = []
-        for reference in sorted(references):
-            value = limit_dbm(reference)+DISPLAY_OFFSET_DB
-            limits.append((f'Test3 lower {value:.2f} dBµV (passband only)',value))
-        self.sweep_chart.set_limits(limits)
-
-
-VerificationTab = CalibrationVerificationTab
-
-
-class NoiseDensityTab(CalibrationTab):
-    """Paired Test5/Test6 spectra from one shared acquisition per carrier."""
-    def __init__(self,parent=None,generator_factory=None,device_factory=None, ip3_generator_factory=None):
-        self._live_density=None
-        super().__init__(parent,generator_factory,mode='density',device_factory=device_factory)
-        old=self.sweep_chart
-        panel=QWidget()
-        self.density_panel=panel  # keep Python ownership after QSplitter.replaceWidget
-        layout=QHBoxLayout(panel)
-        layout.setContentsMargins(0,0,0,0)
-        self.phase_chart=SweepChart(title='Test5 · phase noise density',
-            frequency_label='Offset frequency',display_unit=density_cfg.DISPLAY_UNIT,
-            display_offset_db=density_cfg.DISPLAY_OFFSET_DB,value_label='Noise density',hover_enabled=False)
-        self.amplitude_chart=SweepChart(title='Test6 · amplitude noise density',
-            frequency_label='Offset frequency',display_unit=density_cfg.DISPLAY_UNIT,
-            display_offset_db=density_cfg.DISPLAY_OFFSET_DB,value_label='Noise density',hover_enabled=False)
-        layout.addWidget(self.phase_chart,1)
-        layout.addWidget(self.amplitude_chart,1)
-        self.plot_splitter.replaceWidget(1,panel)
-        old.deleteLater()
-        self.sweep_chart=self.phase_chart
-        self.live_readout=self.phase_chart.hover_label
-        self.plot_splitter.setOrientation(Qt.Orientation.Vertical)
-        self.table.setMinimumHeight(190)
-        self.table.setMaximumHeight(215)
-        self.plot_splitter.setSizes([200,500])
-        self.phase_chart.cursor_table.setMaximumHeight(115)
-        self.amplitude_chart.cursor_table.setMaximumHeight(115)
-        self.connection_hint.setText('Connect the CW generator to RF1. Test5 and Test6 share each IQ acquisition.')
-
-    def _verification_result(self,measurement):
-        from verification import evaluate_test5,evaluate_test6
-        if not measured(measurement):
-            return None,'No complete noise density data'
-        phase,amplitude=evaluate_test5(measurement),evaluate_test6(measurement)
-        def label(value):
-            return 'not evaluated' if value is None else 'pass' if value else 'fail'
-        result=None if phase is None or amplitude is None else bool(phase and amplitude)
-        return result,f'Test5: {label(phase)}; Test6: {label(amplitude)}'
-
-    def _on_completed(self,name,result):
-        super()._on_completed(name,result)
-        if name in self.rows:
-            self.rows[name]['show'].setChecked(self._show_live)
-
-    def _on_density_updated(self,name,result):
-        if name not in self.rows:
-            return
-        self._live_density=(name,result)
-        self._live_name=name
-        self.redraw()
-        self.status.setText(f'{result.carrier_hz/1e6:g} MHz · averaging FFT {result.ffts}/{self.project.settings.noise_ffts}')
-        if not self.busy:
-            self.progress.setRange(0,self.project.settings.noise_ffts)
-            self.progress.setValue(result.ffts)
-
-    def _clear_live(self):
-        self._live_density=None
-        super()._clear_live()
-
-    def redraw(self,*_):
-        if not hasattr(self,'phase_chart'):
-            return
-        phase={};amplitude={}
-        def add(name,result,live=False):
-            if result.offset_hz.size==0:
-                return
-            from chart_ranges import clipped_curve
-            phase_x, phase_y = clipped_curve(result.offset_hz,result.phase_noise,
-                density_cfg.PLOT_FREQUENCY_LIMITS_HZ,log_x=True,max_points=4096)
-            amplitude_x, amplitude_y = clipped_curve(result.offset_hz,result.amplitude_noise,
-                density_cfg.PLOT_FREQUENCY_LIMITS_HZ,log_x=True,max_points=4096)
-            curve=f'{result.carrier_hz/1e6:g} MHz'+(' (live)' if live else '')
-            phase_trace=Trace(phase_x,phase_y,result.unit,None,live,
-                               passed=density_cfg.evaluate_test5(result))
-            amplitude_trace=Trace(amplitude_x,amplitude_y,result.unit,None,live,
-                                   passed=density_cfg.evaluate_test6(result))
-            def reference_trace(reference, attribute):
-                x,y = clipped_curve(reference.offset_hz,getattr(reference,attribute),
-                    density_cfg.PLOT_FREQUENCY_LIMITS_HZ,log_x=True,max_points=4096)
-                return Trace(x,y,reference.unit,None)
-            self._add_trace_with_reference(phase,curve,phase_trace,name,type(result),
-                lambda ref:reference_trace(ref,'phase_noise'))
-            self._add_trace_with_reference(amplitude,curve,amplitude_trace,name,type(result),
-                lambda ref:reference_trace(ref,'amplitude_noise'))
-        if self.backend:
-            for name,row in self.rows.items():
-                result=self.backend.measurements[name]
-                if row['show'].isChecked() and measured(result):
-                    add(name,result)
-        if self._show_live and self._live_density:
-            add(*self._live_density,live=True)
-        self.phase_chart.set_traces(phase)
-        self.amplitude_chart.set_traces(amplitude)
-        for chart in (self.phase_chart,self.amplitude_chart):
-            chart.set_x_limits(density_cfg.PLOT_FREQUENCY_LIMITS_HZ)
+    def redraw(self, *_):
+        self.sweep_chart.set_traces(self._sweep_traces())

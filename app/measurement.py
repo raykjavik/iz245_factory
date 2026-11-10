@@ -1,3 +1,5 @@
+
+from dataclasses import replace
 from dataclasses import dataclass, field
 from datetime import datetime as DateTime
 from pathlib import Path
@@ -33,7 +35,6 @@ class IFSpectrumMeasurement:
                     and not np.any(np.isnan(p) | np.isposinf(p)))
 
     def snapshot(self, max_points=None):
-        from dataclasses import replace
         indices = slice(None) if max_points is None else np.unique(np.append(
             np.linspace(0, len(self.offset_hz)-1, min(max_points,len(self.offset_hz)), dtype=int),
             np.argmin(np.abs(self.offset_hz))))
@@ -88,7 +89,7 @@ class IFSpectrumMeasurement:
             np.savetxt(file,np.column_stack((self.offset_hz,self.power_db)),delimiter=';',fmt='%.12g')
         self.available = True
 
-IP3_COLUMNS = ('freq[MHz]', 'P signal[dBm]', 'P IM3[dBm]', 'IP3[dBm]', 'NF[dB]', 'SFDR[dB]')
+IP3_COLUMNS = ('freq[MHz]', 'P signal[dBm]', 'P IM3[dBm]', 'IP3[dBm]', 'NF density[dB/Hz]', 'SFDR[dB]')
 IP3_ARRAY_FIELDS = ('freq_mhz', 'signal_dbm', 'im3_dbm', 'ip3_dbm', 'nf_db', 'sfdr_db')
 
 
@@ -99,6 +100,7 @@ class IP3Measurement:
     signal_dbm: np.ndarray = field(default_factory=lambda: np.array([]))
     im3_dbm: np.ndarray = field(default_factory=lambda: np.array([]))
     ip3_dbm: np.ndarray = field(default_factory=lambda: np.array([]))
+    noise_unit: str = 'dB/Hz'  # Unit of receiver-provided nf_db; no +174 conversion.
     nf_db: np.ndarray = field(default_factory=lambda: np.array([]))
     sfdr_db: np.ndarray = field(default_factory=lambda: np.array([]))
     available: bool = False
@@ -115,13 +117,12 @@ class IP3Measurement:
             a.ndim == 1 and a.size == arrays[0].size and np.all(np.isfinite(a)) for a in arrays))
 
     def snapshot(self, max_points=None):
-        from dataclasses import replace
         return replace(self, **{name: np.asarray(getattr(self, name)).copy() for name in IP3_ARRAY_FIELDS})
 
     @classmethod
     def from_file(cls, file_path):
         path = Path(file_path)
-        result = cls(name=path.stem, available=path.is_file())
+        result = cls(name=path.stem, available=path.is_file(), noise_unit='dB')
         if not result.available:
             return result
         comments, rows = {}, []
@@ -132,7 +133,7 @@ class IP3Measurement:
                     comments[key.strip()] = value.strip()
                 elif line.strip() and not line.startswith('freq[MHz]'):
                     rows.append([float(v) for v in line.strip().split(';')[:6]])
-        for key, attr in (('NAME', 'name'), ('OPERATOR', 'operator'), ('TEMP', 'temperature')):
+        for key, attr in (('NAME', 'name'), ('OPERATOR', 'operator'), ('TEMP', 'temperature'), ('NOISE_UNIT', 'noise_unit')):
             if key in comments:
                 setattr(result, attr, comments[key])
         for key, attr in (('TONE_SPACING_HZ', 'tone_spacing_hz'),
@@ -152,13 +153,14 @@ class IP3Measurement:
         timestamp = DateTime.fromisoformat(self.datetime) if self.datetime else None
         comments = {'NAME': self.name, 'DATE': timestamp.strftime('%d/%m/%Y') if timestamp else '',
                     'TIME_UTC': timestamp.strftime('%H:%M:%S') if timestamp else '',
-                    'TEMP': self.temperature, 'OPERATOR': self.operator,
+                    'TEMP': self.temperature, 'OPERATOR': self.operator, 'NOISE_UNIT': self.noise_unit,
                     'TONE_SPACING_HZ': self.tone_spacing_hz, 'NOISE_BANDWIDTH_DB': self.noise_bandwidth_db,
                     'PER_TONE_HEADROOM_DB': self.per_tone_headroom_db}
         with Path(file_path).open('w', encoding=ENCODING) as file:
             for key, value in comments.items():
                 file.write(f'#!{key}: {value}\n')
-            file.write(';'.join(IP3_COLUMNS) + ';\n')
+            columns = IP3_COLUMNS if self.noise_unit == 'dB/Hz' else (*IP3_COLUMNS[:4], f'NF[{self.noise_unit}]', IP3_COLUMNS[5])
+            file.write(';'.join(columns) + ';\n')
             np.savetxt(file, np.column_stack([getattr(self, name) for name in IP3_ARRAY_FIELDS]),
                        delimiter=';', fmt='%.12g')
         self.available = True
@@ -176,6 +178,7 @@ class SweepMeasurement:
     reference_dbm: float | None = None
     dwell_sec: float | None = None
     bandwidth_hz: float | None = None
+    quantity: str = ''
 
 
 
@@ -189,7 +192,6 @@ class SweepMeasurement:
                     and np.all(np.isfinite(v)))
 
     def snapshot(self,max_points=None):
-        from dataclasses import replace
         return replace(self,freq_hz=self.freq_hz.copy(),
                        limit_dB=None if self.limit_dB is None else np.asarray(self.limit_dB).copy())
 
@@ -220,6 +222,7 @@ class SweepMeasurement:
             "UNIT": "unit",
             "TEMP": "temperature",
             "OPERATOR": "operator",
+            "QUANTITY": "quantity",
         }
 
         for comment, attribute in comment_attributes.items():
@@ -258,6 +261,8 @@ class SweepMeasurement:
         with Path(file_path).open("w", encoding=ENCODING) as file:
             file.write(f"#!NAME: {self.name}\n")
             file.write(f"#!UNIT: {self.unit}\n")
+            if self.quantity:
+                file.write(f'#!QUANTITY: {self.quantity}\n')
             file.write(f"#!DATE: {date}\n")
             file.write(f"#!TIME_UTC: {time_utc}\n")
             file.write(f"#!TEMP: {self.temperature}\n")
@@ -267,7 +272,9 @@ class SweepMeasurement:
             for key,value in (('DWELL_SEC',self.dwell_sec),('BANDWIDTH_HZ',self.bandwidth_hz)):
                 if value is not None:
                     file.write(f"#!{key}: {value}\n")
-            file.write("freq[Hz];Power[dBm];\n" if self.unit == "dBm" else "freq[Hz];Limit[dB];\n")
+            file.write('freq[Hz];Noise density[dB/Hz];\n' if self.quantity == 'noise_density' else
+                'freq[Hz];NF[dB];\n' if self.quantity == 'noise_figure' else
+                "freq[Hz];Power[dBm];\n" if self.unit == "dBm" else "freq[Hz];Limit[dB];\n")
 
             for index, frequency in enumerate(self.freq_hz):
                 limit = (

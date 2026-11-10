@@ -1,18 +1,20 @@
 """Manual template fields, DUT properties, project persistence, and reports."""
+
+from iz245.cable_calibration import read_cable_calibration as read_cable_calibration_file
+from cfg_test8 import CFG_TEST8
+import connection_cfg
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from collections.abc import Mapping
 import json
+import report
+from project_paths import CALIB_DIR, TEST_DIR, TEMPLATE_PATH
 from docxtpl import DocxTemplate
 from cfg_test3 import PRESELECTOR_POWER_DBM
 import numpy as np
 def read_cable_calibration(path):
-    from iz245.cable_calibration import read_cable_calibration as read
-    return read(path)
+    return read_cable_calibration_file(path)
 
-CALIB_DIR = "calib"
-TEST_DIR = "tests"
-TEMPLATE_PATH = Path(__file__).parent / "template.docx"
 MANUAL_KEYS_PREFIX = "prj_"
 PROJECT_SUFFIX = ".prj"
 # Set your usual .prj path here, or None to disable startup loading.
@@ -20,8 +22,7 @@ DEFAULT_PROJECT_PATH: Path | None = Path(__file__).resolve().parent.parent / "iz
 
 
 def default_template():
-    from report import default_template as create_template
-    return create_template(TEMPLATE_PATH)
+    return report.default_template(TEMPLATE_PATH)
 
 
 def manual_keys():
@@ -71,7 +72,6 @@ class AutoProps:
 
 
 def default_test8_ffts():
-    from cfg_test8 import CFG_TEST8
     return {spec.filter_label:spec.ffts for spec in CFG_TEST8.values()}
 
 
@@ -168,7 +168,6 @@ class FactoryProject:
         root = file.parent
         (root / CALIB_DIR).mkdir(parents=True, exist_ok=True)
         (root / TEST_DIR).mkdir(parents=True, exist_ok=True)
-        import connection_cfg
         setup = MeasurementSettings(generator_ip=connection_cfg.GENERATOR_IP,
                                     generator_port=connection_cfg.GENERATOR_PORT)
         return cls(file.stem, {}, root, settings=setup)
@@ -199,7 +198,6 @@ class FactoryProject:
         project.prop_manual = {key: "" if value is None else str(value)
                                for key, value in manual.items()}
         project.prop_auto = auto
-        import connection_cfg
         initial = dict(operator=auto.operator, dut_ip=auto.dut_ip,
                        cable_calib_path=str(auto.cable_calib_path) if auto.cable_calib_path else '',
                        generator_ip=connection_cfg.GENERATOR_IP,
@@ -241,5 +239,4 @@ FasctoryProject = FactoryProject
 
 def render_reports(prj: FactoryProject):
     """Compatibility entry point. Report generation is owned by report.py."""
-    from report import render_reports as generate
-    return generate(prj, template=default_template())
+    return report.render_reports(prj, template=default_template())

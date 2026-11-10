@@ -6,11 +6,15 @@ checkpoint() handles pause/abort; wait(seconds) is an abortable settling wait
 when called by the application. Plain scripts can omit both callbacks.
 """
 
+from docx.oxml import OxmlElement
+import report_tools
+
 # Presentation only: acquired/stored values are never converted here.
 DISPLAY_UNIT = 'dBµV'
-DISPLAY_OFFSET_DB = 106.9897  # RMS voltage into 50 ohms; display only.
+DISPLAY_OFFSET_DB = 107.0  # Rounded 50-ohm display convention; native dBm/acceptance unchanged.
 TEST1_LIMITS_DB = (-2.0, 2.0)
 CHART_LOG_X = False
+REPORT_GHZ_TICKS_HZ = tuple(value*1e9 for value in range(1,8))
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -194,16 +198,14 @@ REPORT_TABLE = True
 
 def add_report(document, measurements):
     """RF1/RF2 charts followed by their frequency-by-configuration result table."""
-    from report_tools import (add_test_heading, add_measurement_heading, add_chart,
-                              add_table, no_measurements)
-    add_test_heading(document, REPORT_TITLE, REPORT_DESCRIPTION)
+    report_tools.add_test_heading(document, REPORT_TITLE, REPORT_DESCRIPTION)
     if not measurements:
-        no_measurements(document)
+        report_tools.no_measurements(document)
     for rf, configs in (('RF1',CFG_TEST1_RF1),('RF2',CFG_TEST1_RF2)):
         stems = {Path(name).stem for name in configs}
         group = [m for m in measurements if Path(m.name).stem in stems]
         for measurement in group:
-            add_measurement_heading(document, measurement,
+            report_tools.add_measurement_heading(document, measurement,
                 title=f'{rf} · '+configuration_label(measurement.name).replace('\n', ', '),
                 passed=evaluate_test1(measurement))
             if not measurement.has_data():
@@ -218,25 +220,25 @@ def add_report(document, measurements):
             if measurement.reference_dbm is not None:
                 bounds = tuple(value+DISPLAY_OFFSET_DB for value in limits_dbm(measurement.reference_dbm))
                 reference = measurement.reference_dbm+DISPLAY_OFFSET_DB
-                document.add_paragraph(f'Reference {reference:.2f} dBµV '
+                document.add_paragraph(f'Reference {reference:.0f} dBµV '
                     f'({measurement.reference_dbm:g} dBm). Inclusive limits '
-                    f'{bounds[0]:.2f} to {bounds[1]:.2f} dBµV.')
+                    f'{bounds[0]:.0f} to {bounds[1]:.0f} dBµV.')
             else:
                 document.add_paragraph('Saved reference missing; acceptance cannot be established.')
             if REPORT_CHART:
-                add_chart(document, measurement.freq_hz, {'Measured':values},
+                report_tools.add_chart(document, measurement.freq_hz, {'Measured':values},
                     ylabel='RMS received level (dBµV)',log_x=CHART_LOG_X,
-                    limits=bounds,passed=evaluate_test1(measurement))
+                    limits=bounds,passed=evaluate_test1(measurement),
+                    x_ticks=REPORT_GHZ_TICKS_HZ if rf == 'RF1' else None)
         if REPORT_TABLE and group:
             headers, rows = result_table(group,rf)
             if rows:
                 document.add_heading(f'{rf} measured levels',level=3)
-                table = add_table(document,headers,
+                table = report_tools.add_table(document,headers,
                     [['—' if v is None else f'{v:.2f}' if i else f'{v:g}'
                       for i,v in enumerate(row)] for row in rows],
                     style='Test1 Results',text_style='Test1 Table Text',
                     header_style='Test1 Table Header')
                 if table is not None:
-                    from docx.oxml import OxmlElement
                     for row in table.rows:
                         row._tr.get_or_add_trPr().append(OxmlElement('w:cantSplit'))

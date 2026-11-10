@@ -6,13 +6,16 @@ DISPLAY_UNIT = 'dBµV'
 DISPLAY_OFFSET_DB = DBM_TO_DBUV_50_OHM
 
 import numpy as np
-from cfg_common import (_BAND_5K, _CAL_OFF, _RF1, _GAIN_OFF, _IFBAND_MANUAL, _PRES_PATH, _RST, _RSOC_OUT)
+import time
+import report_tools
+from cfg_common import sweep_bandwidth_hz
+from cfg_common import (_BAND_5K, _CAL_ON, _RF1, _GAIN_OFF, _IFBAND_MANUAL, _PRES_PATH, _RST, _RSOC_OUT)
 
 _PRES_FRQ = "INPUT:PRES:FREQUENCY "
 _PRES_HP = "INPUT:PRES:HP  "
 _PRES_LP = "INPUT:PRES:LP  "
 
-_TEST3 = [_RST,_RSOC_OUT,_RF1,_CAL_OFF,_BAND_5K,_IFBAND_MANUAL + "10M"]
+_TEST3 = [_RST,_RSOC_OUT,_RF1,_CAL_ON,_BAND_5K,_IFBAND_MANUAL + "10M"]
 
 
 FREQ_TEST3_1M_100M = np.concat([
@@ -125,17 +128,77 @@ TEST3_TITLES = {
 }
 
 
-def measure_test3(device, generator, frequencies, commands, *, name='',
-                  target_power_dbm=PRESELECTOR_POWER_DBM, attenuator_db=0.,
-                  dwell_sec=.1, operator='', temperature='', checkpoint=None,
-                  wait=None, on_row=None):
-    """External-generator sweep, absolute RMS dBm, same dwell setup as Test1."""
-    from cfg_test1 import measure_test1
-    import time
-    return measure_test1(device,generator,frequencies,commands,name=name,
-        target_power_dbm=target_power_dbm,attenuator_db=attenuator_db,
-        dwell_sec=dwell_sec,operator=operator,temperature=temperature,
-        checkpoint=checkpoint,wait=wait or time.sleep,on_row=on_row)
+def measure_test3(
+    device,
+    generator,
+    frequencies,
+    commands,
+    *,
+    name="",
+    target_power_dbm=PRESELECTOR_POWER_DBM,
+    attenuator_db=0.0,
+    dwell_sec=0.1,
+    operator="",
+    temperature="",
+    checkpoint=None,
+    on_row=None,
+):
+    """Return absolute RMS received power, in dBm.
+
+    Positive attenuator_db is added once to generator POW. Only the existing
+    frequency-dependent cable correction goes to SOURCE:POWER:OFFSET.
+    This function owns RF output state, but never opens/closes connections.
+    """
+    values = []
+    frequencies = np.asarray(frequencies)
+    try:
+        generator.cmd('OUTP:STAT 0')
+        if checkpoint is not None:
+            checkpoint()
+        device._main_scpi_commands(list(commands)+[f"SWEEP:DWELL {dwell_sec}"])
+        cable_enabled = getattr(generator, 'cable_calib', None) is not None
+        
+        generator.cmds(
+            [
+                'SOURCE:ROSC:SOUR EXT',
+                f'POW {target_power_dbm + attenuator_db}',
+                'SOURCE:POWER:OFFSET 0',
+                'OUTP:STAT 1',
+            ]
+        )
+
+        for frequency in frequencies:
+            if checkpoint is not None:
+                checkpoint()
+            frequency = float(frequency)
+            if cable_enabled:
+                correction = generator.get_cable_offset(frequency)
+                generator.cmd(f'SOURCE:POWER:OFFSET {correction}')
+            # Use explicit tuning to avoid any driver fixed-loss fallback.
+            generator.cmd(f'FREQ {frequency:.2f}Hz')
+            device.tune_awaited(frequency)
+            generator.opc()
+            reading_dbm = float(device.measure_point_rms(dwell_sec))
+            if checkpoint is not None:
+                checkpoint()
+            values.append(reading_dbm)
+            if on_row is not None:
+                on_row(frequency, reading_dbm)
+
+        return SweepMeasurement(
+            name=Path(name).stem, freq_hz=frequencies.copy(), limit_dB=np.asarray(values),
+            available=True, datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            operator=operator, temperature=temperature, unit='dBm', reference_dbm=target_power_dbm,
+            dwell_sec=dwell_sec,bandwidth_hz=sweep_bandwidth_hz(commands),
+        )
+    finally:
+        generator.cmd('OUTP:STAT 0')
+
+
+def absolute_dbm(measurement):
+    if measurement.unit != 'dBm':
+        raise ValueError('Test3 needs a generator level sweep in dBm. Remeasure files from the intermediate noise-density version.')
+    return np.asarray(measurement.limit_dB,dtype=float)
 
 
 def limit_dbm(reference_dbm):
@@ -144,7 +207,7 @@ def limit_dbm(reference_dbm):
 
 def evaluate_test3(measurement):
     """All measured in-band levels must be at least reference minus 3 dB."""
-    if not measurement.has_data() or measurement.reference_dbm is None:
+    if not measurement.has_data() or measurement.reference_dbm is None or measurement.unit != 'dBm':
         return False
     band = TEST3_RANGES_HZ.get(Path(measurement.name).stem)
     if band is None:
@@ -167,19 +230,21 @@ REPORT_TABLE = False
 
 def add_report(document, measurements):
     """Append Heading 2, description, then Heading 3 and content per measurement."""
-    from report_tools import (add_test_heading, add_measurement_heading, add_chart,
-                              add_table, no_measurements)
-    add_test_heading(document, REPORT_TITLE, REPORT_DESCRIPTION)
+    report_tools.add_test_heading(document, REPORT_TITLE, REPORT_DESCRIPTION)
     if not measurements:
-        no_measurements(document)
+        report_tools.no_measurements(document)
     for measurement in measurements:
-        add_measurement_heading(document, measurement,
+        report_tools.add_measurement_heading(document, measurement,
             title=TEST3_TITLES.get(Path(measurement.name).stem,measurement.name),
             passed=evaluate_test3(measurement))
         if not measurement.has_data():
             document.add_paragraph('The saved measurement contains no complete data.')
             continue
-        display_values = np.asarray(measurement.limit_dB) + DISPLAY_OFFSET_DB
+        try:
+            display_values = absolute_dbm(measurement) + DISPLAY_OFFSET_DB
+        except ValueError as exc:
+            document.add_paragraph(str(exc))
+            continue
         bounds = None
         if measurement.reference_dbm is not None:
             bounds = (limit_dbm(measurement.reference_dbm)+DISPLAY_OFFSET_DB,)
@@ -190,9 +255,9 @@ def add_report(document, measurements):
             details = f'Evaluated frequencies: {scope}.'
             if measurement.reference_dbm is not None:
                 details += (f' Reference {measurement.reference_dbm:g} dBm '
-                    f'({measurement.reference_dbm+DISPLAY_OFFSET_DB:.2f} dBµV); '
-                    f'lower limit {bounds[0]:.2f} dBµV (−3 dB).')
+                    f'({measurement.reference_dbm+DISPLAY_OFFSET_DB:.0f} dBµV); '
+                    f'lower limit {bounds[0]:.0f} dBµV (−3 dB).')
             document.add_paragraph(details)
         if REPORT_CHART:
-            add_chart(document, measurement.freq_hz, {'Measured': display_values},
+            report_tools.add_chart(document, measurement.freq_hz, {'Measured': display_values},
                       ylabel=f'Level ({DISPLAY_UNIT})',limits=bounds,passed=evaluate_test3(measurement))

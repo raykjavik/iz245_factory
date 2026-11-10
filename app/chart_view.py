@@ -1,4 +1,8 @@
 """Zoom and pan controls that keep a live-data reset range."""
+
+import math
+from PySide6.QtCharts import QValueAxis
+from PySide6.QtCharts import QLogValueAxis
 from PySide6.QtCore import Qt
 from PySide6.QtCharts import QChartView
 
@@ -83,7 +87,6 @@ class CalibrationChartView(QChartView):
 
 
 def _nice_step(span, target=6):
-    import math
     raw = max(span / target, 1e-12)
     magnitude = 10 ** math.floor(math.log10(raw))
     fraction = raw / magnitude
@@ -93,7 +96,6 @@ def _nice_step(span, target=6):
 
 def update_tick_spacing(axis, low, high):
     """Readable 1/2/2.5/5 steps, including after zooming and panning."""
-    from PySide6.QtCharts import QValueAxis
     if isinstance(axis, QValueAxis):
         axis.setTickType(QValueAxis.TickType.TicksDynamic)
         axis.setTickAnchor(0)
@@ -102,8 +104,6 @@ def update_tick_spacing(axis, low, high):
 
 
 def nice_axis_range(axis, low, high):
-    import math
-    from PySide6.QtCharts import QLogValueAxis
     if isinstance(axis, QLogValueAxis):
         axis.setMinorTickCount(8)
         return 10 ** math.floor(math.log10(low)), 10 ** math.ceil(math.log10(high))
