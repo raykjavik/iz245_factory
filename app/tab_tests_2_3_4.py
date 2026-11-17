@@ -10,7 +10,7 @@ from sweep_chart import SweepChart
 
 
 class NoisePreselectorsTab(CalibrationTab):
-    """Separate voltage-level and noise-density charts for Tests2/3/4."""
+    """Separate voltage-level and noise-figure charts for Tests2/3/4."""
     def __init__(self, parent=None, generator_factory=None, verification_check=None, device_factory=None, ip3_generator_factory=None):
         self._noise_charts_ready=False
         super().__init__(parent,generator_factory,verification_check=verification_check,
@@ -24,12 +24,12 @@ class NoisePreselectorsTab(CalibrationTab):
         layout=QVBoxLayout(panel);layout.setContentsMargins(0,0,0,0)
         self.level_chart=SweepChart(title='Test3 & Test4 · RMS level',frequency_label='Frequency',
             value_label='RMS level',display_unit=cfg_test3.DISPLAY_UNIT,display_offset_db=cfg_test3.DISPLAY_OFFSET_DB)
-        self.density_chart=SweepChart(title='Test2 · noise figure',frequency_label='Frequency',
-            value_label='NF density',display_unit='dB/Hz',display_offset_db=0.)
-        layout.addWidget(self.density_chart,1)
+        self.nf_chart=SweepChart(title='Test2 · noise figure (relative to thermal noise)',frequency_label='Frequency',
+            value_label='NF',display_unit='dB',display_offset_db=0.)
+        layout.addWidget(self.nf_chart,1)
         layout.addWidget(self.level_chart,1)
         old=self.sweep_chart;self.plot_splitter.replaceWidget(1,panel);old.deleteLater()
-        self.sweep_chart=self.level_chart  # existing integration / cursor compatibility
+        self.sweep_chart=self.level_chart  # primary chart for shared measurement controls
         self.live_readout=self.level_chart.hover_label
         self.plot_splitter.setOrientation(Qt.Orientation.Horizontal)
         self.plot_splitter.setChildrenCollapsible(False)
@@ -72,7 +72,7 @@ class NoisePreselectorsTab(CalibrationTab):
         for label,trace in self._sweep_traces().items():
             destination=nf if (trace.color_key or label).startswith('TEST2') else level
             destination[label]=trace
-        self.level_chart.set_traces(level);self.density_chart.set_traces(nf)
+        self.level_chart.set_traces(level);self.nf_chart.set_traces(nf)
         references=set()
         if self.backend:
             for name,row in self.rows.items():
@@ -83,4 +83,4 @@ class NoisePreselectorsTab(CalibrationTab):
                 references.add(self.backend.spec_for(self._live_name).power_dbm)
         self.level_chart.set_limits([(f'Test3 lower limit {cfg_test3.limit_dbm(reference)+cfg_test3.DISPLAY_OFFSET_DB:.2f} dBµV',
             cfg_test3.limit_dbm(reference)+cfg_test3.DISPLAY_OFFSET_DB) for reference in sorted(references)])
-        self.density_chart.set_limits([])
+        self.nf_chart.set_limits([])

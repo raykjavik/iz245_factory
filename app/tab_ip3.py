@@ -53,9 +53,9 @@ class IP3Tab(CalibrationTab):
         for label in ('IP3', 'NF', 'SFDR'):
             attribute, unit, offset = self.chart_specs[label]
             chart = SweepChart(
-                title=f'Test7 · {"NF density" if label == "NF" else label}',
+                title=f'Test7 · {label}',
                 frequency_label='Frequency',
-                value_label="NF density" if label == "NF" else label,
+                value_label=label,
                 display_unit=unit,
                 display_offset_db=offset,
             )
@@ -119,11 +119,8 @@ class IP3Tab(CalibrationTab):
         selected = {}
         if self.backend:
             for name, row in self.rows.items():
-                if row['show'].isChecked() and self.backend.measurements[name].noise_unit == 'dB/Hz':
+                if row['show'].isChecked():
                     selected[name] = self.backend.measurements[name]
-
-        if self.backend and any(row['show'].isChecked() and self.backend.measurements[name].noise_unit != 'dB/Hz' for name,row in self.rows.items()):
-            self.status.setText('Legacy Test7 noise conversion: remeasure for corrected NF density and SFDR.')
 
         # A live result replaces the saved result of the same configuration.
         if self._show_live and self._live_ip3:
@@ -151,7 +148,7 @@ class IP3Tab(CalibrationTab):
                 )
                 self._add_trace_with_reference(traces[label],name,trace,name,type(result),
                     lambda ref:Trace(np.asarray(ref.freq_mhz)*1e6,
-                        np.asarray(getattr(ref,attribute)),unit,None) if ref.noise_unit == 'dB/Hz' else None)
+                        np.asarray(getattr(ref,attribute)),unit,None))
 
             for values in zip(
                 *(getattr(result, field) for field in IP3_ARRAY_FIELDS)

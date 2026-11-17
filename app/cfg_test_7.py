@@ -1,17 +1,29 @@
 """Domain configuration, measurement procedure and report content."""
+
+from datetime import datetime, timezone
+from pathlib import Path
+import time
+
+import numpy as np
+from iz245.device import Device
+
 import report_tools
+from cfg_common import (
+    _CAL_ON, _RF1, _RF2, _GAIN_ON, _GAIN_OFF, _IFBAND_MANUAL,
+    _PRESELECTOR_OFF, _PRESELECTOR_ON, _PG_OFF, _RST, _RSOC_OUT,
+)
+from detector import read_detector
+from measurement import IP3Measurement, IP3_ARRAY_FIELDS
+
 # Presentation for each selectable metric: label, attribute, unit, display offset.
 DISPLAY_METRICS = (
     ('IP3','ip3_dbm','dBm',0.0),
     ('SFDR','sfdr_db','dB',0.0),
-    ('NF','nf_db','dB/Hz',0.0),
+    ('NF','nf_db','dB',0.0),
     ('P signal','signal_dbm','dBm',0.0),
     ('P IM3','im3_dbm','dBm',0.0),
 )
 
-import numpy as np
-from iz245.device import Device
-from cfg_common import (_CAL_ON, _RF1, _RF2, _GAIN_ON, _GAIN_OFF, _IFBAND_MANUAL, _PRESELECTOR_OFF, _PRESELECTOR_ON, _PG_OFF, _RST, _RSOC_OUT)
 
 FREQ_TEST7_RF1 = np.array([
     38e6, 118e6, 260e6, 520e6, 1080e6, 2600e6, 3860e6, 5650e6,
@@ -24,8 +36,8 @@ FREQ_TEST7_RF2 = np.array([3.5e6, 27e6, 55e6]).astype(int)
 
 
 
-_TEST7_RF1 = [_RST, _RF1, _CAL_ON, _IFBAND_MANUAL + '10M', _PG_OFF]
-_TEST7_RF2 = [_RST, _RF2, _CAL_ON, _IFBAND_MANUAL + '10M']
+_TEST7_RF1 = [_RST, _RF1, _CAL_ON, _IFBAND_MANUAL + '100k', _PG_OFF]
+_TEST7_RF2 = [_RST, _RF2, _CAL_ON, _IFBAND_MANUAL + '100k']
 
 CFG_TEST7_RF1 = {
     'TEST7_RF1_PRESELECTOR_OFF_GAIN_OFF.txt': (FREQ_TEST7_RF1, _TEST7_RF1 + [_PRESELECTOR_OFF, _GAIN_OFF]),
@@ -38,14 +50,8 @@ CFG_TEST7_RF2 = {
     'TEST7_RF2_GAIN_ON_ATT1_6_dB_ATT2_16.txt': (FREQ_TEST7_RF2, _TEST7_RF2 + [_GAIN_ON,"INPut[:RF2]:ATTenuator:RF1 6","INPut[:RF2]:ATTenuator:RF2 16"]),
 }
 
-# Legacy compatibility only; this domain now sends explicit two-channel SCPI.
-TEST7_TWO_TONE_COMMANDS = None
 
 
-from datetime import datetime, timezone
-from pathlib import Path
-from measurement import IP3Measurement, IP3_ARRAY_FIELDS
-import time
 
 # R&S SMATE200A Operating Manual 1401.0940.32-14, printed pages 770/772.
 # DUT reference output -> SMATE200A REF IN. One reference serves both RF paths.
@@ -55,9 +61,13 @@ SMATE200A_REFERENCE_COMMANDS = (
 )
 TEST7_NOISE_BANDWIDTH_HZ = 100e3
 TEST7_SIGNAL_BANDWIDTH_HZ = 3e3
+# SFDR reference bandwidth, independent of the detector acquisition bandwidth.
+TEST7_SFDR_BANDWIDTH_HZ = 3_000.0
+TEST7_SFDR_BANDWIDTH_DB = 10.0 * np.log10(TEST7_SFDR_BANDWIDTH_HZ)
+THERMAL_NOISE_DENSITY_DBM_HZ = -174.0
 
 
-from detector import read_detector
+
 
 
 def configure_two_tones(generator, f1_hz, f2_hz, target_dbm, attenuator_db):
@@ -84,7 +94,7 @@ def measure_test7(device:Device, generator, spec, *, name='', noise_dwell_sec=1.
                   checkpoint=lambda:None, check_cancel=lambda:None,
                   wait=time.sleep, on_row=lambda result:None, on_progress=lambda:None):
     result=IP3Measurement(name=Path(name).stem,operator=operator,temperature=temperature,
-        tone_spacing_hz=spec.tone_spacing_hz,noise_bandwidth_db=spec.noise_bandwidth_db,
+        tone_spacing_hz=spec.tone_spacing_hz,noise_bandwidth_db=TEST7_SFDR_BANDWIDTH_DB,
         per_tone_headroom_db=headroom_db)
     rows=[]
     try:
@@ -92,43 +102,59 @@ def measure_test7(device:Device, generator, spec, *, name='', noise_dwell_sec=1.
         checkpoint()
         check_cancel()
         # Reference output must be enabled after any reset in spec.commands.
-        device._main_scpi_commands(list(spec.commands)+[_RSOC_OUT])
+        device._main_scpi_commands(list(spec.commands)+[
+            _RSOC_OUT,
+            f'BAND {TEST7_NOISE_BANDWIDTH_HZ:g}',
+            f'SWEEP:DWELL {noise_dwell_sec:g}',
+        ])
         device._main_scpi_query('*OPC?')
         check_cancel()
         generator.cmds(list(SMATE200A_REFERENCE_COMMANDS))
         generator.opc()
+        # Configure the noise dwell once, then collect every frequency with RF off.
+        noise_points=[]
         for frequency in spec.frequencies:
             checkpoint()
             check_cancel()
-
             f1=float(frequency)
-            f2=f1+spec.tone_spacing_hz
+            device.tune_awaited(f1)
+            vals=read_detector(device,noise_dwell_sec,wait=wait,check_cancel=check_cancel)
+            # Keep the measured input noise density in dBm/Hz until NF/SFDR are calculated.
+            noise_points.append((f1,float(vals[-3]),float(vals[-4])))
 
+        # Switch dwell once for the signal/IM3 pass. Both readings share it.
+        checkpoint()
+        check_cancel()
+        signal_commands=[f'BAND {TEST7_SIGNAL_BANDWIDTH_HZ:g}']
+        if signal_dwell_sec != noise_dwell_sec:
+            signal_commands.append(f'SWEEP:DWELL {signal_dwell_sec:g}')
+        device._main_scpi_commands(signal_commands)
+        device._main_scpi_query('*OPC?')
+        for f1,full_range,noise_density_dbm_hz in noise_points:
+            checkpoint()
+            check_cancel()
+            f2=f1+spec.tone_spacing_hz
             generator.cmds(['OUTP1:STAT 0','OUTP2:STAT 0'])
             generator.opc()
-            device._main_scpi_command(f'BAND {TEST7_NOISE_BANDWIDTH_HZ:g}')
             device.tune_awaited(f1)
-            vals = read_detector(device,noise_dwell_sec,wait=wait,check_cancel=check_cancel)
-            full_range=vals[-3]
-            noise_hz = vals[-4]  # Receiver-provided normalized NF density, dB/Hz.
             target_dbm=full_range-headroom_db
-            checkpoint()
-            device._main_scpi_command(f'BAND {TEST7_SIGNAL_BANDWIDTH_HZ:g}')
-            device._main_scpi_query('*OPC?')
             configure_two_tones(generator,f1,f2,target_dbm,attenuator_db)
             check_cancel()
             generator.cmds(['OUTP1:STAT 1','OUTP2:STAT 1'])
             generator.opc()
             signal_dbm=read_detector(device,signal_dwell_sec,wait=wait,check_cancel=check_cancel)[3]
-            
+
             checkpoint()
             device.tune_awaited(f2+spec.tone_spacing_hz)
             im3_dbm=read_detector(device,signal_dwell_sec,wait=wait,check_cancel=check_cancel)[3]
-            
-            nf_db=noise_hz  # Already normalized by the receiver; do not add 174.
+
             ip3_dbm=signal_dbm+(signal_dbm-im3_dbm)/2.0
-            sfdr_db=(2.0/3.0)*(ip3_dbm-(-174.0+nf_db+spec.noise_bandwidth_db))
+            noise_floor_dbm = (
+                noise_density_dbm_hz + TEST7_SFDR_BANDWIDTH_DB
+            )
+            sfdr_db = (2.0 / 3.0) * (ip3_dbm - noise_floor_dbm)
             
+            nf_db=noise_density_dbm_hz-THERMAL_NOISE_DENSITY_DBM_HZ
             rows.append((f1/1e6,signal_dbm,im3_dbm,ip3_dbm,nf_db,sfdr_db))
             for attr,values in zip(IP3_ARRAY_FIELDS,np.asarray(rows).T):
                 setattr(result,attr,values.copy())
@@ -153,22 +179,20 @@ REPORT_TABLE = True
 
 def add_report(document, measurements):
     report_tools.add_test_heading(document, 'Test7 IP3 and SFDR',
-        'Two tone measurements of signal and intermodulation levels, with calculated IP3 and SFDR, and receiver-provided NF density (dB/Hz).')
+        'Two tone measurements of signal and intermodulation levels, with calculated IP3, noise figure NF (dB) and SFDR.')
     if not measurements:
         report_tools.no_measurements(document)
     for measurement in measurements:
         report_tools.add_measurement_heading(document, measurement, passed=evaluate_test7(measurement))
         document.add_paragraph(f'Tone spacing {measurement.tone_spacing_hz:g} Hz. '
-            f'Per tone headroom {measurement.per_tone_headroom_db:g} dB below full range.')
-        if measurement.noise_unit != 'dB/Hz':
-            document.add_paragraph('Legacy Test7 noise conversion: remeasure to obtain receiver-provided NF density and corrected SFDR.')
-            continue
+            f'Per tone headroom {measurement.per_tone_headroom_db:g} dB below full range. '
+            f'SFDR reference bandwidth {10 ** (measurement.noise_bandwidth_db / 10):g} Hz.')
         if not measurement.has_data():
             document.add_paragraph('The saved measurement contains no complete data.')
             continue
         if REPORT_TABLE:
             report_tools.add_table(document, ['Frequency (MHz)', 'P signal (dBm)', 'P IM3 (dBm)',
-                                 'IP3 (dBm)', 'NF density (dB/Hz)', 'SFDR (dB)'],
+                                 'IP3 (dBm)', 'NF (dB)', 'SFDR (dB)'],
                       zip(*(getattr(measurement, field) for field in IP3_ARRAY_FIELDS)))
         if REPORT_CHART:
             report_tools.add_chart(document, measurement.freq_mhz*1e6, {'IP3':measurement.ip3_dbm}, ylabel='IP3 (dBm)',passed=evaluate_test7(measurement))

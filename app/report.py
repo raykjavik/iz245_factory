@@ -64,13 +64,13 @@ def load_measurements(project):
 
 
 def _verification_context(groups):
-    """Legacy field-based template variables remain available."""
+    """Build named template variables from the current measurements."""
     sweeps = []
     for group in ('test1', 'test2', 'test3', 'test4'):
         for filename, result in groups[group]:
-            points = [] if result.limit_dB is None else [
-                dict(frequency_hz=float(f), value=float(v)) for f,v in zip(result.freq_hz,result.limit_dB)]
-            sweeps.append(dict(name=result.name,filename=filename,unit=result.unit,
+            points = [] if result.vals is None else [
+                dict(frequency_hz=float(f), value=float(v)) for f,v in zip(result.freq_hz,result.vals)]
+            sweeps.append(dict(name=result.name,filename=filename,unit=result.unit,quantity=result.quantity,
                 datetime=result.datetime,operator=result.operator,temperature=result.temperature,
                 reference_dbm=result.reference_dbm,dwell_sec=result.dwell_sec,
                 bandwidth_hz=result.bandwidth_hz,passed=evaluate_verification(result),points=points))

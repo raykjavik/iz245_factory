@@ -15,7 +15,7 @@ import time
 import traceback
 import numpy as np
 from PySide6.QtCore import QObject, Signal
-
+from iz245.device import Device
 
 def hann_window(count):
     return .5 - .5 * np.cos(2 * np.pi * np.arange(count) / count)
@@ -89,7 +89,7 @@ class FFTProcessor(QObject):
     spectrum_updated = Signal(object)
     progress = Signal(int)
 
-    def __init__(self, device, *, window_samples, fft_count, overlap=.5,
+    def __init__(self, device:Device, *, window_samples, fft_count, overlap=.5,
                  sample_rate_hz, transform=two_sided_psd, update_interval=.5,
                  batch_ffts=16, queue_frames=4, capture_buffer_bytes=64*1024**2,
                  parent=None, debug=True):
@@ -205,6 +205,8 @@ class FFTProcessor(QObject):
                     self.device.read_capture_perpartes(
                         clb=enqueue,write_buffer=buffer,n=self.n,
                         cnt=count,overlap=self.overlap)
+                    if (self.device.header.receiver_status>0):
+                        raise RuntimeError("overrange")
                     remaining -= count
                     self._debug(f'BATCH {batch} READ returned elapsed={time.monotonic()-started:.3f}s '
                                 f'remaining={remaining} processed={processed[0]} enqueued={enqueued[0]}')

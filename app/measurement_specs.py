@@ -9,16 +9,16 @@ import numpy as np
 
 CALIB_POWER = -40.0
 VERIFICATION_POW = -50.0
-NOISE_UNIT = 'dB'  # Raw acquisition values; presentation is configured in cfg_*.
 
 
 @dataclass(frozen=True)
 class SweepSpec:
     frequencies: np.ndarray
     commands: tuple[str, ...]
-    kind: str = 'receiver_sweep'
+    kind: str
     storage: str = 'tests'
-    unit: str = NOISE_UNIT
+    unit: str = 'dB'
+    quantity: str = ''
     power_dbm: float | None = None
     power_setting: str | None = None
     display_unit: str = 'dB'
@@ -33,7 +33,7 @@ class SweepSpec:
 
     @property
     def needs_generator(self):
-        return self.kind in ('generator_sweep', 'calibration', 'test1', 'test3')
+        return self.kind in ('calibration', 'test1', 'test3')
 
     @property
     def generator_frequencies(self):
@@ -74,7 +74,6 @@ class IP3Spec:
     frequencies: np.ndarray
     commands: tuple[str, ...]
     tone_spacing_hz: float = 100e3
-    noise_bandwidth_db: float = 34.8
     storage: str = 'tests'
     kind: str = 'ip3'
     needs_generator: bool = True

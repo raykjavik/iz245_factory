@@ -50,7 +50,7 @@ def measure_test4(device, frequencies, commands, *, name='', dwell_sec=.1,
         if on_row is not None:
             on_row(float(frequency), value)
     return SweepMeasurement(name=Path(name).stem, freq_hz=np.asarray(frequencies).copy(),
-        limit_dB=np.asarray(values), available=True, unit='dBm',
+        vals=np.asarray(values), available=True, unit='dBm', quantity='power',
         datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         operator=operator, temperature=temperature,
         dwell_sec=dwell_sec,bandwidth_hz=sweep_bandwidth_hz(commands))
@@ -78,7 +78,7 @@ def add_report(document, measurements):
         if not measurement.has_data():
             document.add_paragraph('The saved measurement contains no complete data.')
             continue
-        display_values = np.asarray(measurement.limit_dB) + DISPLAY_OFFSET_DB
+        display_values = np.asarray(measurement.vals) + DISPLAY_OFFSET_DB
         if REPORT_TABLE:
             report_tools.add_table(document, ['Frequency (Hz)', f'Value ({DISPLAY_UNIT})'],
                       zip(measurement.freq_hz, display_values))

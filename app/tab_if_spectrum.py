@@ -4,7 +4,6 @@ from PySide6.QtWidgets import QTableWidgetItem,QHeaderView
 from tab_calib import CalibrationTab
 import cfg_test8 as test8_cfg
 from sweep_chart import SweepChart, Trace
-from spectrum_display import max_envelope
 
 
 class IFSpectrumTab(CalibrationTab):
@@ -19,7 +18,7 @@ class IFSpectrumTab(CalibrationTab):
             self.table.horizontalHeader().setSectionResizeMode(column,QHeaderView.ResizeMode.ResizeToContents)
         self.if_chart = SweepChart(title='Test8 · IF filter spectra',
             frequency_label='Offset from 500 MHz', display_unit=test8_cfg.DISPLAY_UNIT,display_offset_db=test8_cfg.DISPLAY_OFFSET_DB,
-            value_label='RMS level',hover_enabled=False)
+            value_label='RMS level',hover_enabled=False,spectral=True)
         self.if_chart.scale.setCurrentText('Linear')
         self.if_chart.scale.hide()  # a signed offset axis cannot use log frequency
         old = self.sweep_chart
@@ -94,21 +93,21 @@ class IFSpectrumTab(CalibrationTab):
         def add(name,result,live=False):
             if result.offset_hz.size == 0:
                 return
-            frequency,maximum=max_envelope(result.offset_hz,result.power_db)
+            frequency,values=result.offset_hz,result.power_db
             label=f'IF {result.if_bandwidth_hz/1e6:g} MHz'+(' (live)' if live else '')
             widths.append(result.if_bandwidth_hz)
-            trace=Trace(frequency,maximum,result.unit,None,live,
-                display_unit=test8_cfg.DISPLAY_UNIT if result.unit == 'dBm' else result.unit,
-                display_offset_db=test8_cfg.DISPLAY_OFFSET_DB if result.unit == 'dBm' else 0.,
+            trace=Trace(frequency,values,result.unit,None,live,
+                display_unit=test8_cfg.DISPLAY_UNIT,
+                display_offset_db=test8_cfg.DISPLAY_OFFSET_DB,
                 passed=test8_cfg.evaluate_test8(result))
             def reference_trace(reference):
                 if reference.unit != result.unit:
                     return None
-                x,y = max_envelope(reference.offset_hz,reference.power_db)
+                x,y = reference.offset_hz,reference.power_db
                 return Trace(x,y,reference.unit,None,
-                    display_unit=test8_cfg.DISPLAY_UNIT if reference.unit == 'dBm' else reference.unit,
-                    display_offset_db=test8_cfg.DISPLAY_OFFSET_DB if reference.unit == 'dBm' else 0.)
-            self._add_trace_with_reference(traces,label+' · max',trace,name,type(result),reference_trace)
+                    display_unit=test8_cfg.DISPLAY_UNIT,
+                    display_offset_db=test8_cfg.DISPLAY_OFFSET_DB)
+            self._add_trace_with_reference(traces,label,trace,name,type(result),reference_trace)
         if self.backend:
             for name,row in self.rows.items():
                 if row['show'].isChecked():

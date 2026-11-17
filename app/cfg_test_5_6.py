@@ -43,11 +43,10 @@ from fft_processor import (FFTProcessor, NoiseDensityEstimator, to_dbc_hz,
 def _configure_carrier(dev:Device, gen, spec, dwell, attenuator_db, wait):
     dev.tune_awaited(spec.carrier_hz)
     
-    dev._main_scpi_commands([
-        f"SWEEP:DWELL {dwell}",
-        'DETector:CLEar'
-        ])
+    dev._main_scpi_command('DETector:CLEar')
     dev.set_32b_iq_format()
+    if dwell > 1.0:
+        wait(dwell)
     response=dev._main_scpi_query('sense:data?').split(',')
     full_range=float(response[-3])
     target=full_range-spec.headroom_db
@@ -58,7 +57,6 @@ def _configure_carrier(dev:Device, gen, spec, dwell, attenuator_db, wait):
     gen.cmd(f'FREQ {spec.carrier_hz:.2f}Hz')
     gen.cmd('OUTP:STAT 1')
     gen.opc()
-    wait(dwell)
     return target
 
 
@@ -71,7 +69,7 @@ def measure_tests5_6(device, generator, spec, *, name='', dwell_sec=.1,
     """Finite captures; FFTProcessor owns capture/FFT threads and linear means."""
     try:
         checkpoint()
-        device._main_scpi_commands(list(spec.commands))
+        device._main_scpi_commands(list(spec.commands)+[f'SWEEP:DWELL {dwell_sec:g}'])
         device.set_32b_iq_format()
         target = _configure_carrier(device, generator, spec, dwell_sec, attenuator_db, wait)
         fs = float(device.get_sampling_rate_hz())
@@ -89,7 +87,7 @@ def measure_tests5_6(device, generator, spec, *, name='', dwell_sec=.1,
                 available=True, operator=operator, temperature=temperature,
                 sample_rate_hz=fs, window_samples=spec.window_samples,
                 overlap=spec.overlap, ffts=average.completed, reference_dbm=target)
-            return result.snapshot(max_points=4096) if preview else result
+            return result.snapshot() if preview else result
 
         def publish(average):
             on_spectrum(measurement(average, preview=True))

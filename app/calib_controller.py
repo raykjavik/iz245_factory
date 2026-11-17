@@ -23,9 +23,6 @@ from run_control import pause_checkpoint
 CFG_CALIB_ALL = {**CFG_CALIB_RF1, **CFG_PCALIB, **CFG_CALIB_RF2}
 CFG_TEST1_ALL = {**CFG_TEST1_RF1, **CFG_TEST1_RF2}
 CFG_NOISE_ALL = {**CFG_TEST2, **CFG_TEST2_RF2, **CFG_TEST3, **CFG_TEST4}
-CFG_VERIFICATION_ALL = {**CFG_TEST1_ALL, **CFG_NOISE_ALL}
-CFG_VERIFIACATION_ALL = CFG_VERIFICATION_ALL  # compatibility with uploaded spelling
-CFG_ALL = {**CFG_CALIB_ALL, **CFG_VERIFICATION_ALL}
 
 
 def measured(measurement):
@@ -61,8 +58,6 @@ class MeasurementController:
         self.density_updated=density_updated or (lambda name,result:None)
         self.done = self.total = 0
         self.measurements, self.errors = {}, {}
-        self.calibrations = self.measurements  # existing UI compatibility
-        self.verifications = {}
         self.measurement_names = tuple(MEASUREMENT_SPECS if measurement_names is None else measurement_names)
         if load_existing:
             self.reload()
@@ -92,12 +87,11 @@ class MeasurementController:
         self.errors.clear()
         for name in self.measurement_names:
             try:
-                self.calibrations[name] = MEASUREMENT_SPECS[name].measurement_class.from_file(self.path(name))
+                self.measurements[name] = MEASUREMENT_SPECS[name].measurement_class.from_file(self.path(name))
             except Exception as exc:
-                self.calibrations[name] = MEASUREMENT_SPECS[name].measurement_class(name=Path(name).stem)
+                self.measurements[name] = MEASUREMENT_SPECS[name].measurement_class(name=Path(name).stem)
                 self.errors[name] = str(exc)
-        self.verifications = {name:value for name,value in self.measurements.items()
-                              if MEASUREMENT_SPECS[name].storage==TEST_DIR}
+
 
     def path(self, name):
         return self.prj.root / MEASUREMENT_SPECS[name].storage / name
@@ -112,8 +106,6 @@ class MeasurementController:
     def _publish(self, name, cm):
         self.measurements[name] = cm
         self.errors.pop(name, None)
-        if MEASUREMENT_SPECS[name].storage == TEST_DIR:
-            self.verifications[name] = cm
         self.completed(name, cm.snapshot())
 
     def spec_for(self, name):
@@ -393,14 +385,3 @@ class MeasurementController:
                 raise ValueError('Configure SSH transfer settings before calibration transfers.')
             self.transfer.settings.validate()
         job.execute(self)
-
-    def calib_ch1_pipeline(self):
-        self.run('ch1')
-
-    calib_ch1_pipieline=calib_ch1_pipeline
-
-    def calib_ch2_pipeline(self):
-        self.run('ch2')
-
-
-CalibrationController = MeasurementController

@@ -44,8 +44,6 @@ class IFSpectrumMeasurement:
     def from_file(cls, file_path):
         path = Path(file_path)
         result = cls(name=path.stem, available=path.is_file())
-        # Older uncalibrated files must never be relabelled as absolute power.
-        result.unit = 'dB re 1 IQ²/Hz'
         if not result.available:
             return result
         comments, rows = {}, []
@@ -80,8 +78,7 @@ class IFSpectrumMeasurement:
             'OPERATOR':self.operator,'CARRIER_HZ':self.carrier_hz,'IF_BANDWIDTH_HZ':self.if_bandwidth_hz,
             'SAMPLE_RATE_HZ':self.sample_rate_hz,'WINDOW_SAMPLES':self.window_samples,
             'OVERLAP':self.overlap,'FFTS':self.ffts,'WINDOW':'periodic Hann',
-            'SPECTRUM':('two-sided Hann power spectrum; fftshift' if self.unit == 'dBm'
-                        else 'two-sided complex IQ PSD; fftshift'), 'AVERAGING':'linear power'}
+            'SPECTRUM':'two-sided Hann power spectrum; fftshift', 'AVERAGING':'linear power'}
         with Path(file_path).open('w',encoding=ENCODING) as file:
             for key,value in comments.items():
                 file.write(f'#!{key}: {value}\n')
@@ -89,7 +86,7 @@ class IFSpectrumMeasurement:
             np.savetxt(file,np.column_stack((self.offset_hz,self.power_db)),delimiter=';',fmt='%.12g')
         self.available = True
 
-IP3_COLUMNS = ('freq[MHz]', 'P signal[dBm]', 'P IM3[dBm]', 'IP3[dBm]', 'NF density[dB/Hz]', 'SFDR[dB]')
+IP3_COLUMNS = ('freq[MHz]', 'P signal[dBm]', 'P IM3[dBm]', 'IP3[dBm]', 'NF[dB]', 'SFDR[dB]')
 IP3_ARRAY_FIELDS = ('freq_mhz', 'signal_dbm', 'im3_dbm', 'ip3_dbm', 'nf_db', 'sfdr_db')
 
 
@@ -100,7 +97,6 @@ class IP3Measurement:
     signal_dbm: np.ndarray = field(default_factory=lambda: np.array([]))
     im3_dbm: np.ndarray = field(default_factory=lambda: np.array([]))
     ip3_dbm: np.ndarray = field(default_factory=lambda: np.array([]))
-    noise_unit: str = 'dB/Hz'  # Unit of receiver-provided nf_db; no +174 conversion.
     nf_db: np.ndarray = field(default_factory=lambda: np.array([]))
     sfdr_db: np.ndarray = field(default_factory=lambda: np.array([]))
     available: bool = False
@@ -108,7 +104,7 @@ class IP3Measurement:
     operator: str = ''
     temperature: str = ''
     tone_spacing_hz: float = 100e3
-    noise_bandwidth_db: float = 34.8
+    noise_bandwidth_db: float = float(10*np.log10(3000.))
     per_tone_headroom_db: float = 3.01029995664
 
     def has_data(self):
@@ -122,7 +118,7 @@ class IP3Measurement:
     @classmethod
     def from_file(cls, file_path):
         path = Path(file_path)
-        result = cls(name=path.stem, available=path.is_file(), noise_unit='dB')
+        result = cls(name=path.stem, available=path.is_file())
         if not result.available:
             return result
         comments, rows = {}, []
@@ -131,9 +127,12 @@ class IP3Measurement:
                 if line.startswith('#!'):
                     key, value = line[2:].split(':', 1)
                     comments[key.strip()] = value.strip()
-                elif line.strip() and not line.startswith('freq[MHz]'):
+                elif line.startswith('freq[MHz]'):
+                    if tuple(line.strip().rstrip(';').split(';')) != IP3_COLUMNS:
+                        raise ValueError('Unexpected IP3 column units.')
+                elif line.strip():
                     rows.append([float(v) for v in line.strip().split(';')[:6]])
-        for key, attr in (('NAME', 'name'), ('OPERATOR', 'operator'), ('TEMP', 'temperature'), ('NOISE_UNIT', 'noise_unit')):
+        for key, attr in (('NAME', 'name'), ('OPERATOR', 'operator'), ('TEMP', 'temperature')):
             if key in comments:
                 setattr(result, attr, comments[key])
         for key, attr in (('TONE_SPACING_HZ', 'tone_spacing_hz'),
@@ -153,14 +152,13 @@ class IP3Measurement:
         timestamp = DateTime.fromisoformat(self.datetime) if self.datetime else None
         comments = {'NAME': self.name, 'DATE': timestamp.strftime('%d/%m/%Y') if timestamp else '',
                     'TIME_UTC': timestamp.strftime('%H:%M:%S') if timestamp else '',
-                    'TEMP': self.temperature, 'OPERATOR': self.operator, 'NOISE_UNIT': self.noise_unit,
+                    'TEMP': self.temperature, 'OPERATOR': self.operator,
                     'TONE_SPACING_HZ': self.tone_spacing_hz, 'NOISE_BANDWIDTH_DB': self.noise_bandwidth_db,
                     'PER_TONE_HEADROOM_DB': self.per_tone_headroom_db}
         with Path(file_path).open('w', encoding=ENCODING) as file:
             for key, value in comments.items():
                 file.write(f'#!{key}: {value}\n')
-            columns = IP3_COLUMNS if self.noise_unit == 'dB/Hz' else (*IP3_COLUMNS[:4], f'NF[{self.noise_unit}]', IP3_COLUMNS[5])
-            file.write(';'.join(columns) + ';\n')
+            file.write(';'.join(IP3_COLUMNS) + ';\n')
             np.savetxt(file, np.column_stack([getattr(self, name) for name in IP3_ARRAY_FIELDS]),
                        delimiter=';', fmt='%.12g')
         self.available = True
@@ -169,7 +167,7 @@ class IP3Measurement:
 class SweepMeasurement:
     name: str = ""
     freq_hz: np.ndarray = field(default_factory=lambda: np.array([]))
-    limit_dB: np.ndarray | None = None
+    vals: np.ndarray | None = None
     available: bool = False
     datetime: str = ""
     operator: str = ""
@@ -184,16 +182,16 @@ class SweepMeasurement:
 
 
     def has_data(self):
-        if not self.available or self.limit_dB is None:
+        if not self.available or self.vals is None:
             return False
-        f,v=np.asarray(self.freq_hz),np.asarray(self.limit_dB)
+        f,v=np.asarray(self.freq_hz),np.asarray(self.vals)
         return bool(f.ndim==v.ndim==1 and f.size>0 and f.size==v.size
                     and np.all(np.isfinite(f)&(f>0)) and np.all(np.diff(f)>0)
                     and np.all(np.isfinite(v)))
 
     def snapshot(self,max_points=None):
         return replace(self,freq_hz=self.freq_hz.copy(),
-                       limit_dB=None if self.limit_dB is None else np.asarray(self.limit_dB).copy())
+                       vals=None if self.vals is None else np.asarray(self.vals).copy())
 
     @classmethod
     def from_file(cls, file_path):
@@ -205,7 +203,7 @@ class SweepMeasurement:
 
         comments = {}
         frequencies = []
-        limits = []
+        values = []
 
         with path.open(encoding=ENCODING) as file:
             for line in file:
@@ -213,9 +211,9 @@ class SweepMeasurement:
                     key, value = line[2:].split(":", 1)
                     comments[key.strip()] = value.strip()
                 elif line.strip() and not line.startswith("freq[Hz]"):
-                    frequency, limit, *_ = line.strip().split(";")
+                    frequency, value, *_ = line.strip().split(";")
                     frequencies.append(float(frequency))
-                    limits.append(float(limit) if limit else np.nan)
+                    values.append(float(value) if value else np.nan)
 
         comment_attributes = {
             "NAME": "name",
@@ -241,9 +239,9 @@ class SweepMeasurement:
             if comments.get(key):
                 setattr(measurement,attribute,float(comments[key]))
         measurement.freq_hz = np.array(frequencies)
-        measurement.limit_dB = (
-            np.array(limits)
-            if any(not np.isnan(value) for value in limits)
+        measurement.vals = (
+            np.array(values)
+            if any(not np.isnan(value) for value in values)
             else None
         )
 
@@ -277,12 +275,12 @@ class SweepMeasurement:
                 "freq[Hz];Power[dBm];\n" if self.unit == "dBm" else "freq[Hz];Limit[dB];\n")
 
             for index, frequency in enumerate(self.freq_hz):
-                limit = (
-                    self.limit_dB[index]
-                    if self.limit_dB is not None
+                value = (
+                    self.vals[index]
+                    if self.vals is not None
                     else ""
                 )
-                file.write(f"{frequency};{limit};\n")
+                file.write(f"{frequency};{value};\n")
 
         self.available = True
 

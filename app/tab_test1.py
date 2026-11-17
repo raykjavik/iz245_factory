@@ -73,4 +73,3 @@ class CalibrationVerificationTab(CalibrationTab):
         self.sweep_chart.set_limits(limits)
 
 
-VerificationTab = CalibrationVerificationTab

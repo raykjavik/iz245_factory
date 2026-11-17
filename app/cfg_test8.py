@@ -12,6 +12,7 @@ from cfg_common import _RF1, _CAL_ON, _GAIN_OFF, _PRESELECTOR_OFF, _IFBAND_MANUA
 from measurement_specs import IFSpectrumSpec
 from measurement import IFSpectrumMeasurement
 from fft_processor import FFTProcessor, power_spectrum
+import report_tools
 
 TEST8 = {'carrier_hz':500e6, 'overlap':.5}
 _TEST8_CMDS = ["*RST", _RF1, _CAL_ON, _GAIN_OFF, _PRESELECTOR_OFF]
@@ -39,16 +40,22 @@ def measure_test8(device, spec, *, name='', dwell_sec=.1,
                   operator='', temperature='', checkpoint=lambda:False, wait=time.sleep,
                   check_cancel=lambda:None,
                   on_spectrum=lambda result:None, on_progress=lambda:None,
-                  on_status=lambda text:None):
+                  on_status=lambda text:None, iq_bits='Auto', fft_debug=True):
     """Average calibrated linear power in each Hann resolution bandwidth."""
     checkpoint()
-    device._main_scpi_commands(list(spec.commands))
+    if spec.commands:
+        device._main_scpi_commands(list(spec.commands))
     device.tune_awaited(spec.carrier_hz)
-    if spec.reciver_bandwidth > 40e6:
+    bits=(16 if spec.reciver_bandwidth>40e6 else 32) if iq_bits=='Auto' else int(iq_bits)
+    if bits == 16:
         device.set_16b_iq_format()
-    else:
+    elif bits == 32:
         device.set_32b_iq_format()
-    wait(dwell_sec)
+    else:
+        raise ValueError('IQ format must be Auto, 16 or 32.')
+    if dwell_sec > 1.0:
+        wait(dwell_sec)
+    check_cancel()
     fs = float(device.get_sampling_rate_hz())
 
     def transform(iq, sample_rate_hz):
@@ -75,7 +82,8 @@ def measure_test8(device, spec, *, name='', dwell_sec=.1,
 
     processor = FFTProcessor(device, window_samples=spec.window_samples,
         fft_count=spec.ffts, overlap=spec.overlap, sample_rate_hz=fs,
-        transform=transform, update_interval=PLOT_INTERVAL_SEC)
+        transform=transform, update_interval=PLOT_INTERVAL_SEC,debug=fft_debug)
+    on_status(f'Waiting for IQ data · {spec.window_samples} samples / FFT · {spec.ffts} windows')
     average = processor.run(checkpoint=checkpoint, check_cancel=check_cancel,
         on_average=publish, on_progress=on_progress)
     checkpoint()
@@ -107,26 +115,21 @@ REPORT_OFFSETS_HZ = (-40e6,-20e6,0.,20e6,40e6)
 
 
 def display_values(measurement):
-    """Legacy IQ PSD files cannot be calibrated without their receiver header."""
-    if measurement.unit == 'dBm':
-        return measurement.power_db + DISPLAY_OFFSET_DB, DISPLAY_UNIT
-    return measurement.power_db, measurement.unit
+    return np.asarray(measurement.power_db)+DISPLAY_OFFSET_DB,DISPLAY_UNIT
 
 
 def add_report(document, measurements):
-    from report_tools import add_test_heading, add_measurement_heading, add_chart, add_table, no_measurements
-    add_test_heading(document,'Test8 IF filter spectra',
+    report_tools.add_test_heading(document,'Test8 IF filter spectra',
         'Two sided power spectra with RF1 terminated in 50 ohms, receiver tuned to 500 MHz; receiver BAND and FFT size are selected per filter.')
     if not measurements:
-        no_measurements(document)
+        report_tools.no_measurements(document)
     for measurement in measurements:
         title = f'IF filter {measurement.if_bandwidth_hz/1e6:g} MHz' if measurement.if_bandwidth_hz>1e6 else f'IF filter {measurement.if_bandwidth_hz/1e3:g} kHz' 
-        add_measurement_heading(document,measurement,
+        report_tools.add_measurement_heading(document,measurement,
             title=title,passed=evaluate_test8(measurement))
         document.add_paragraph(f'{measurement.ffts} windows of {measurement.window_samples} samples. '
             f'Overlap {measurement.overlap:g}. Sample rate {measurement.sample_rate_hz/1e6:.3f} MHz. '
-            + ('RMS level in each Hann resolution bandwidth, calibrated from the receiver header.'
-               if measurement.unit == 'dBm' else 'Legacy spectrum; original saved units retained.'))
+            'RMS level in each Hann resolution bandwidth, calibrated from the receiver header.')
         if not measurement.has_data():
             document.add_paragraph('The saved spectrum contains no complete data.')
             continue
@@ -134,10 +137,10 @@ def add_report(document, measurements):
         if REPORT_TABLE:
             indices = sorted({int(np.argmin(np.abs(measurement.offset_hz-offset)))
                 for offset in REPORT_OFFSETS_HZ if measurement.offset_hz[0] <= offset <= measurement.offset_hz[-1]})
-            add_table(document,['Offset (Hz)',f'Level ({unit})'],
+            report_tools.add_table(document,['Offset (Hz)',f'Level ({unit})'],
                 [(measurement.offset_hz[i],values[i]) for i in indices])
         if REPORT_CHART:
-            add_chart(document,measurement.offset_hz,{'Measured':values},
+            report_tools.add_chart(document,measurement.offset_hz,{'Measured':values},
                 ylabel=f'RMS level ({unit})',xlabel='Offset from 500 MHz (Hz)',log_x=False,
                 passed=evaluate_test8(measurement),
                 vertical_limits=filter_edges_hz(measurement.if_bandwidth_hz),

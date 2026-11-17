@@ -122,8 +122,8 @@ def measure_calibration(
                 on_row(frequency, deviation_db)
 
         return SweepMeasurement(
-            name=Path(name).stem, freq_hz=frequencies.copy(), limit_dB=np.asarray(values),
-            available=True, datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            name=Path(name).stem, freq_hz=frequencies.copy(), vals=np.asarray(values),
+            available=True, quantity='calibration', datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             operator=operator, temperature=temperature, unit='dB', reference_dbm=target_power_dbm,
             dwell_sec=dwell_sec,bandwidth_hz=sweep_bandwidth_hz(commands),
         )

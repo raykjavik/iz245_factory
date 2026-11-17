@@ -22,10 +22,10 @@ class NoiseDensityTab(CalibrationTab):
         layout.setContentsMargins(0,0,0,0)
         self.phase_chart=SweepChart(title='Test5 · phase noise density',
             frequency_label='Offset frequency',display_unit=density_cfg.DISPLAY_UNIT,
-            display_offset_db=density_cfg.DISPLAY_OFFSET_DB,value_label='Noise density',hover_enabled=False)
+            display_offset_db=density_cfg.DISPLAY_OFFSET_DB,value_label='Noise density',hover_enabled=False,spectral=True)
         self.amplitude_chart=SweepChart(title='Test6 · amplitude noise density',
             frequency_label='Offset frequency',display_unit=density_cfg.DISPLAY_UNIT,
-            display_offset_db=density_cfg.DISPLAY_OFFSET_DB,value_label='Noise density',hover_enabled=False)
+            display_offset_db=density_cfg.DISPLAY_OFFSET_DB,value_label='Noise density',hover_enabled=False,spectral=True)
         layout.addWidget(self.phase_chart,1)
         layout.addWidget(self.amplitude_chart,1)
         self.plot_splitter.replaceWidget(1,panel)
@@ -77,9 +77,9 @@ class NoiseDensityTab(CalibrationTab):
             if result.offset_hz.size==0:
                 return
             phase_x, phase_y = clipped_curve(result.offset_hz,result.phase_noise,
-                density_cfg.PLOT_FREQUENCY_LIMITS_HZ,log_x=True,max_points=4096)
+                density_cfg.PLOT_FREQUENCY_LIMITS_HZ,log_x=True)
             amplitude_x, amplitude_y = clipped_curve(result.offset_hz,result.amplitude_noise,
-                density_cfg.PLOT_FREQUENCY_LIMITS_HZ,log_x=True,max_points=4096)
+                density_cfg.PLOT_FREQUENCY_LIMITS_HZ,log_x=True)
             curve=f'{result.carrier_hz/1e6:g} MHz'+(' (live)' if live else '')
             phase_trace=Trace(phase_x,phase_y,result.unit,None,live,
                                passed=density_cfg.evaluate_test5(result))
@@ -87,7 +87,7 @@ class NoiseDensityTab(CalibrationTab):
                                    passed=density_cfg.evaluate_test6(result))
             def reference_trace(reference, attribute):
                 x,y = clipped_curve(reference.offset_hz,getattr(reference,attribute),
-                    density_cfg.PLOT_FREQUENCY_LIMITS_HZ,log_x=True,max_points=4096)
+                    density_cfg.PLOT_FREQUENCY_LIMITS_HZ,log_x=True)
                 return Trace(x,y,reference.unit,None)
             self._add_trace_with_reference(phase,curve,phase_trace,name,type(result),
                 lambda ref:reference_trace(ref,'phase_noise'))

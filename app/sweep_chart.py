@@ -15,6 +15,7 @@ from PySide6 import QtCore, QtWidgets
 from helpers import CollapsibleSection
 from chart_style import APP_CURVE_COLORS, LIMIT_COLOR
 from chart_ranges import data_x_range, clipped_x_range, visible_y_range, Y_MARGIN
+from spectrum_display import min_max_envelope
 
 
 def si_frequency(value):
@@ -110,10 +111,11 @@ class FreeCursor:
 class SweepChart(QtWidgets.QWidget):
     def __init__(self,parent=None, *, title='Sweep measurements · 50 Ω',
                  frequency_label='Frequency', display_unit='dB', display_offset_db=0.0,
-                 value_label=None, hover_enabled=True):
+                 value_label=None, hover_enabled=True, spectral=False):
         super().__init__(parent)
         self.title=title
         self.hover_enabled=hover_enabled
+        self.spectral=spectral
         self.display_unit=display_unit
         self.display_offset_db=display_offset_db
         self.value_label=value_label
@@ -191,6 +193,8 @@ class SweepChart(QtWidgets.QWidget):
         self.plot.scene().sigMouseClicked.connect(self._click)
         self.plot.getViewBox().sigRangeChangedManually.connect(self._navigated)
         self.plot.getViewBox().sigXRangeChanged.connect(self._autoscale_visible_y)
+        self.plot.getViewBox().sigXRangeChanged.connect(self._resample_spectra)
+        self.plot.getViewBox().sigResized.connect(self._resample_spectra)
         self.scale.currentIndexChanged.connect(self._scale_changed)
         self.reset.clicked.connect(self.reset_view)
         self.cursor_mode.currentIndexChanged.connect(self._update_interaction_mode)
@@ -274,16 +278,16 @@ class SweepChart(QtWidgets.QWidget):
             self.legend.removeItem(item)
             self.plot.removeItem(item)
         for index,(name,trace) in enumerate(self.traces.items()):
-            y=self.converted(trace)
+            x,y=self._display_data(trace)
             style = (QtCore.Qt.PenStyle.DashDotLine if trace.is_reference else
                      QtCore.Qt.PenStyle.DashLine if trace.live else QtCore.Qt.PenStyle.SolidLine)
             pen=pg.mkPen(trace.color or self._curve_color(trace.color_key or name),width=2,style=style)
             if name in self.items:
-                self.items[name].setData(trace.x,y)
+                self.items[name].setData(x,y)
                 self.items[name].setPen(pen)
             else:
-                self.items[name]=self.plot.plot(trace.x,y,pen=pen,name=escape(name),
-                                                 connect='finite',antialias=True)
+                self.items[name]=self.plot.plot(x,y,pen=pen,name=escape(name),
+                                                 connect='finite',antialias=not self.spectral)
             self.items[name].setOpacity(.5 if trace.is_reference else 1.)
         self.plot.setLabel('left',self.value_label or 'Level',units=self._axis_unit())
         self.plot.setTitle(self.title,color='#303030')
@@ -292,6 +296,24 @@ class SweepChart(QtWidgets.QWidget):
         if not self.user_navigated:
             self._apply_x_limits()
         self._autoscale_visible_y()
+
+    def _display_data(self,trace):
+        x,y=np.asarray(trace.x),np.asarray(trace.y)
+        if self.spectral and len(x):
+            low,high=self.plot.getViewBox().viewRange()[0]
+            if self.log_x:
+                low,high=10**low,10**high
+            start=max(0,int(np.searchsorted(x,low))-1)
+            stop=min(len(x),int(np.searchsorted(x,high,side='right'))+1)
+            x,y=min_max_envelope(x[start:stop],y[start:stop],
+                buckets=max(1,int(self.plot.getViewBox().width())),log_x=self.log_x)
+        offset=self._trace_offset(trace)
+        return x,y+offset if offset else y
+
+    def _resample_spectra(self,*_):
+        if self.spectral:
+            for name,item in self.items.items():
+                item.setData(*self._display_data(self.traces[name]))
 
     def _curve_color(self, name):
         # A saved result and its live preview represent the same measurement.

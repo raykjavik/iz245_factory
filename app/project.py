@@ -27,15 +27,11 @@ def default_template():
 
 def manual_keys():
     return sorted(f for f in default_template().get_undeclared_template_variables()
-                  if f.startswith((MANUAL_KEYS_PREFIX, "pjr_")))
+                  if f.startswith(MANUAL_KEYS_PREFIX))
 
 
 def format_manual_key(key):
-    for prefix in (MANUAL_KEYS_PREFIX, "pjr_"):
-        if key.startswith(prefix):
-            key = key[len(prefix):]
-            break
-    return key.replace("_", " ").capitalize()
+    return key.removeprefix(MANUAL_KEYS_PREFIX).replace('_',' ').capitalize()
 
 
 @dataclass
@@ -178,18 +174,8 @@ class FactoryProject:
         data = json.loads(file.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("Project JSON must be an object.")
-        version = data.get("schema_version")
-        if version not in (None, 1, 2, 3, 4):
-            raise ValueError(f"Unsupported project schema version: {version}")
-        if version in (2, 3, 4) or (version == 1 and "prop_manual" in data):
-            # Also read files written by the supplied revision with version 1.
-            manual = data.get("prop_manual", {})
-            automatic = data.get("prop_auto", {})
-        elif version == 1:
-            manual = data.get("properties", {})
-            automatic = data.get("hardware", {})
-        else:
-            manual, automatic = data, {}
+        manual=data['prop_manual']
+        automatic=data['prop_auto']
         if not isinstance(manual, dict):
             raise ValueError("Manual properties must be an object.")
         auto = AutoProps.from_dict(automatic)
@@ -198,12 +184,7 @@ class FactoryProject:
         project.prop_manual = {key: "" if value is None else str(value)
                                for key, value in manual.items()}
         project.prop_auto = auto
-        initial = dict(operator=auto.operator, dut_ip=auto.dut_ip,
-                       cable_calib_path=str(auto.cable_calib_path) if auto.cable_calib_path else '',
-                       generator_ip=connection_cfg.GENERATOR_IP,
-                       generator_port=connection_cfg.GENERATOR_PORT)
-        initial.update(data.get('settings', {}))
-        project.settings = MeasurementSettings.from_dict(initial)
+        project.settings = MeasurementSettings.from_dict(data['settings'])
         project.sync_settings()
         project.load_cable_calibration()
         return project
@@ -221,22 +202,3 @@ class FactoryProject:
         temporary = self.file.with_suffix(".prj.tmp")
         temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
         temporary.replace(self.file)
-
-    @property
-    def properties(self):
-        """Compatibility with the previous manual-properties attribute."""
-        return self.prop_manual
-
-    @properties.setter
-    def properties(self, value):
-        self.prop_manual = value
-
-    properies = properties
-
-
-FasctoryProject = FactoryProject
-
-
-def render_reports(prj: FactoryProject):
-    """Compatibility entry point. Report generation is owned by report.py."""
-    return report.render_reports(prj, template=default_template())

@@ -186,8 +186,8 @@ def measure_test3(
                 on_row(frequency, reading_dbm)
 
         return SweepMeasurement(
-            name=Path(name).stem, freq_hz=frequencies.copy(), limit_dB=np.asarray(values),
-            available=True, datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            name=Path(name).stem, freq_hz=frequencies.copy(), vals=np.asarray(values),
+            available=True, quantity='power', datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             operator=operator, temperature=temperature, unit='dBm', reference_dbm=target_power_dbm,
             dwell_sec=dwell_sec,bandwidth_hz=sweep_bandwidth_hz(commands),
         )
@@ -197,8 +197,8 @@ def measure_test3(
 
 def absolute_dbm(measurement):
     if measurement.unit != 'dBm':
-        raise ValueError('Test3 needs a generator level sweep in dBm. Remeasure files from the intermediate noise-density version.')
-    return np.asarray(measurement.limit_dB,dtype=float)
+        raise ValueError('Test3 requires a power sweep in dBm.')
+    return np.asarray(measurement.vals,dtype=float)
 
 
 def limit_dbm(reference_dbm):
@@ -217,7 +217,7 @@ def evaluate_test3(measurement):
     inside = (frequencies >= low) & (frequencies <= high)
     if not np.any(inside) or frequencies[0] > low or frequencies[-1] < high:
         return False
-    return bool(np.all(np.asarray(measurement.limit_dB)[inside] >= limit_dbm(measurement.reference_dbm)))
+    return bool(np.all(np.asarray(measurement.vals)[inside] >= limit_dbm(measurement.reference_dbm)))
 
 
 # Edit these values and the function below to define this test's Word section.

@@ -112,7 +112,7 @@ class JobFactory:
 
 
 def make_job(action,name=None):
-    """Legacy string entry point; UI/worker carry the resulting named job."""
+    """Resolve a UI action to its measurement job."""
     if isinstance(action,MeasurementJob):
         return action
     factory=getattr(JobFactory,action,None)

@@ -12,6 +12,7 @@ from tab_tests_2_3_4 import NoisePreselectorsTab
 from tab_tests_5_6 import NoiseDensityTab
 from tab_ip3 import IP3Tab
 from tab_if_spectrum import IFSpectrumTab
+from tab_diagnostics import DiagnosticsTab
 from menu import ProjectMenu
 from controller import Controller
 import project as project_model
@@ -38,7 +39,10 @@ class MainWindow(QMainWindow):
         self.ip3_tab = IP3Tab(device_factory=device_factory,
                               ip3_generator_factory=ip3_generator_factory)
         self.if_spectrum_tab = IFSpectrumTab(device_factory=device_factory)
+        self.diagnostics_tab=DiagnosticsTab(device_factory=device_factory,
+            generator_factory=generator_factory,ip3_generator_factory=ip3_generator_factory)
         self.workflow_tabs = [self.calibration_tab, self.verification_tab, self.noise_tab,self.density_tab,self.ip3_tab,self.if_spectrum_tab]
+        self.hardware_tabs=[*self.workflow_tabs,self.diagnostics_tab]
         for page, title in ((self.settings_tab, "Settings"),
                             (self.project_tab, "Project details"),
                             (self.calibration_tab, "Calibrations"),
@@ -49,11 +53,12 @@ class MainWindow(QMainWindow):
                             (self.if_spectrum_tab,"IF filter spectra")):
             self.tabs.add_led_tab(page, title)
             page.validity_changed.connect(lambda ok, page=page: self.tabs.set_tab_ok(page, ok))
+        self.tabs.addTab(self.diagnostics_tab,'Diagnostics')
         self.project_menu = ProjectMenu(self, self.project_tab,
-                                        [self.settings_tab, *self.workflow_tabs])
+                                        [self.settings_tab, *self.hardware_tabs])
         self.controller = Controller(lambda: self.project_menu.project, self,
                                      device_factory=device_factory)
-        self.run_toolbar = MeasurementToolbar(self.workflow_tabs, self)
+        self.run_toolbar = MeasurementToolbar(self.hardware_tabs, self)
         self.addToolBar(self.run_toolbar)
         self.settings_tab.connect_requested.connect(self.controller.connect_device)
         self.settings_tab.changed.connect(self.project_menu.mark_dirty)
@@ -82,19 +87,23 @@ class MainWindow(QMainWindow):
                 page.ip3_updated.connect(destination._on_ip3_updated)
                 page.spectrum_updated.connect(destination._on_spectrum_updated)
                 page.run_finished.connect(destination.finish_external_run)
+        self.settings_tab.changed.connect(self.diagnostics_tab.setup_changed)
+        self.diagnostics_tab.changed.connect(self.project_menu.mark_dirty)
+        self.diagnostics_tab.message.connect(self.statusBar().showMessage)
+        self.diagnostics_tab.busy_changed.connect(self._update_busy)
         self.statusBar().showMessage("Create or open a project to begin.")
         self.project_menu.open_default_project(project_model.DEFAULT_PROJECT_PATH)
 
     def _update_busy(self, *_):
-        busy = self.controller.busy or any(page.busy for page in self.workflow_tabs)
-        for page in self.workflow_tabs:
+        busy = self.controller.busy or any(page.busy for page in self.hardware_tabs)
+        for page in self.hardware_tabs:
             page.set_external_busy(busy and not page.busy)
         self.menuBar().setEnabled(not busy)
         self.project_tab.setEnabled(not busy)
         self.settings_tab.setEnabled(not busy and self.project_menu.project is not None)
 
     def closeEvent(self, event):
-        if self.controller.busy or any(page.busy for page in self.workflow_tabs):
+        if self.controller.busy or any(page.busy for page in self.hardware_tabs):
             self.statusBar().showMessage("Hardware work is running; abort or wait for completion before closing.")
             event.ignore()
             return

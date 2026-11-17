@@ -3,7 +3,7 @@
 from detector import read_detector
 import report_tools
 
-DISPLAY_UNIT = 'dB/Hz'
+DISPLAY_UNIT = 'dB'
 DISPLAY_OFFSET_DB = 0.0
 NOISE_BANDWIDTH_HZ = 100_000.0
 _BAND_100K = 'BAND 100k'
@@ -26,7 +26,7 @@ CFG_TEST2_RF2 = {
     "TEST2_RF2_GAIN_OFF.txt":(FREQ_AXIS_CH2_HZ,_TEST2_RF2+[_GAIN_OFF]),
     "TEST2_RF2_GAIN_ON.txt" :(FREQ_AXIS_CH2_HZ,_TEST2_RF2+[_GAIN_ON ]),
 }
-
+THERMAL_NOISE_DENSITY_DBM_HZ = -174.0
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,29 +38,22 @@ import time
 def measure_test2(device, frequencies, commands, *, name='', dwell_sec=.1,
                   operator='', temperature='', checkpoint=None, on_row=None,
                   wait=time.sleep, check_cancel=lambda:None):
-    """Receiver-only NF density: store and publish sense:data?[-4] unchanged."""
-    device._main_scpi_commands(list(commands))
+    """Receiver NF in dB, referred to the thermal noise density."""
+    device._main_scpi_commands(list(commands)+[f'SWEEP:DWELL {dwell_sec:g}'])
     values=[]
     for frequency in frequencies:
         if checkpoint is not None:checkpoint()
         device.tune_awaited(frequency)
         vals=read_detector(device,dwell_sec,wait=wait,check_cancel=check_cancel)
-        value=vals[-4]
+        value=vals[-4]-THERMAL_NOISE_DENSITY_DBM_HZ
         if checkpoint is not None:checkpoint()
         values.append(value)
         if on_row is not None:on_row(float(frequency),value)
     return SweepMeasurement(name=Path(name).stem,freq_hz=np.asarray(frequencies).copy(),
-        limit_dB=np.asarray(values),available=True,unit='dB/Hz',quantity='noise_density',
+        vals=np.asarray(values),available=True,unit='dB',quantity='noise_figure',
         datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         operator=operator,temperature=temperature,dwell_sec=dwell_sec,
         bandwidth_hz=sweep_bandwidth_hz(commands))
-
-
-def noise_figure_density(measurement):
-    """No NF calculation: the receiver provides the normalized dB/Hz value."""
-    if measurement.unit != 'dB/Hz' or measurement.quantity not in ('','noise_density') or measurement.reference_dbm is not None:
-        raise ValueError('Legacy Test2 data has different units. Remeasure Test2 to record receiver NF density in dB/Hz.')
-    return np.asarray(measurement.limit_dB,dtype=float)
 
 
 def evaluate_test2(measurement):
@@ -70,8 +63,8 @@ def evaluate_test2(measurement):
 
 # Edit these values and the function below to define this test's Word section.
 REPORT_TITLE = 'Test2 Noise Figure'
-REPORT_DESCRIPTION = ('Receiver-provided noise-figure density in dB/Hz, with the selected RF input terminated in 50 ohms and a 100 kHz band. '
-    'The detector density field is read directly without conversion. A recorded measurement passes; no numerical limit is applied.')
+REPORT_DESCRIPTION = ('Receiver noise figure relative to -174 dBm/Hz, with the selected RF input terminated in 50 ohms and a 100 kHz band. '
+    'A recorded measurement passes; no numerical limit is applied.')
 REPORT_CHART = True
 REPORT_TABLE = False
 
@@ -88,10 +81,10 @@ def add_report(document, measurements):
             document.add_paragraph('The saved measurement contains no complete data.')
             continue
         try:
-            display_values = noise_figure_density(measurement)
+            display_values = np.asarray(measurement.vals,dtype=float)
         except ValueError as exc:
             document.add_paragraph(str(exc))
             continue
         if REPORT_CHART:
             report_tools.add_chart(document, measurement.freq_hz, {'Measured': display_values},
-                      ylabel=f'NF density ({DISPLAY_UNIT})',passed=evaluate_test2(measurement))
+                      ylabel=f'NF({DISPLAY_UNIT})',passed=evaluate_test2(measurement))

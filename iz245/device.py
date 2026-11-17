@@ -230,6 +230,7 @@ class Device:
 
 
     def on_tdoa_connect(self):
+        assert 0, "You should not use TDOA setting "
         if not self.connected:
             raise RuntimeError("Connect the device first.")
         self._main_scpi_command("*RST")

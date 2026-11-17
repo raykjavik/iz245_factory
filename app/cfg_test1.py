@@ -123,8 +123,8 @@ def measure_test1(
                 on_row(frequency, reading_dbm)
 
         return SweepMeasurement(
-            name=Path(name).stem, freq_hz=frequencies.copy(), limit_dB=np.asarray(values),
-            available=True, datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+            name=Path(name).stem, freq_hz=frequencies.copy(), vals=np.asarray(values),
+            available=True, quantity='power', datetime=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             operator=operator, temperature=temperature, unit='dBm', reference_dbm=target_power_dbm,
             dwell_sec=dwell_sec,bandwidth_hz=sweep_bandwidth_hz(commands),
         )
@@ -133,13 +133,9 @@ def measure_test1(
 
 
 def absolute_dbm(measurement):
-    """New files store dBm. Old dB deviation files need their saved reference."""
-    values = np.asarray(measurement.limit_dB, dtype=float)
-    if measurement.unit == 'dBm':
-        return values
-    if measurement.unit == 'dB' and measurement.reference_dbm is not None:
-        return values + measurement.reference_dbm
-    raise ValueError('Test1 data needs dBm units, or a saved reference for legacy deviations.')
+    """Test1 stores absolute RMS power in dBm."""
+    if measurement.unit != 'dBm':raise ValueError('Test1 requires dBm values.')
+    return np.asarray(measurement.vals,dtype=float)
 
 
 def limits_dbm(reference_dbm):

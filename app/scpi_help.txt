@@ -1,0 +1,352 @@
+SCPI command reference
+======================
+Commands are alphabetized within each instrument section.
+[A] used in this application; [P] found in the supplied iz245 package;
+[R] additional common lab commands from the R&S manuals linked below.
+Replace <...> parameters before sending. ON/OFF and parameter alternatives
+are notation, not a batch to paste. Queries end in ?. One command per line.
+The help viewer only displays text; it never sends commands.
+
+SMA100B – Signal generator
+==========================
+
+*CLS
+    [R] Clear status.
+
+*IDN?
+    [A/P] Identification.
+
+*OPC?
+    [A/P] Wait for pending operations; expect 1.
+
+*RST
+    [R] Reset settings.
+
+FREQ <frequency>Hz
+    [A/P] RF frequency; short alias.
+
+OUTPut:STATe <ON|OFF>
+    [A] RF output.
+
+OUTPut:STATe?
+    [R] RF output state.
+
+POW <level>dBm
+    [A] Level; short alias.
+
+SOURce:AM1:STATe <ON|OFF>
+    [R] AM enable; requires installed option.
+
+SOURce:FM1:STATe <ON|OFF>
+    [R] FM enable; requires installed option.
+
+SOURce:FREQuency <frequency>Hz
+    [R] RF frequency.
+
+SOURce:FREQuency:MODE CW
+    [R] Constant frequency.
+
+SOURce:FREQuency?
+    [R] Read frequency.
+
+SOURce:MODulation:ALL:STATe OFF
+    [R] Disable modulation.
+
+SOURce:POWer <level>dBm
+    [R] Displayed level, including offset.
+
+SOURce:POWer:MODE CW
+    [R] Constant level.
+
+SOURce:POWer:OFFSet <offset>dB
+    [A/P] Downstream level offset.
+
+SOURce:POWer:POWer <level>dBm
+    [R] Physical RF connector level, excluding offset.
+
+SOURce:POWer?
+    [R] Read level.
+
+SOURce:PULM:STATe <ON|OFF>
+    [R] Pulse modulation; requires installed option.
+
+SOURce:ROSCillator:EXTernal:FREQuency 10MHZ
+    [R] External reference frequency.
+
+SOURce:ROSCillator:SOURce <INT|EXT>
+    [A] Reference source; app uses EXT.
+
+SYSTem:ERRor?
+    [R] Read the next error.
+
+SMATE200A – Two-path signal generator
+=====================================
+
+*CLS
+    [R] Clear status.
+
+*IDN?
+    [A/P] Identification.
+
+*OPC?
+    [A/P] Wait for pending operations; expect 1.
+
+*RST
+    [R] Reset settings.
+
+FREQ <frequency>Hz
+    [P] First-path frequency alias.
+
+OUTPut1:STATe <ON|OFF>
+    [A] RF path 1 output.
+
+OUTPut2:STATe <ON|OFF>
+    [A] RF path 2 output.
+
+POW <level>dBm
+    [P] First-path level alias.
+
+SOURce1:FREQuency <frequency>Hz
+    [A] RF path 1 frequency.
+
+SOURce1:FREQuency:MODE CW
+    [A] RF path 1 CW mode.
+
+SOURce1:MODulation:ALL:STATe OFF
+    [A] RF path 1 modulation off.
+
+SOURce1:POWer <level>dBm
+    [A] RF path 1 level.
+
+SOURce1:POWer:MODE CW
+    [A] RF path 1 constant level.
+
+SOURce1:POWer:OFFSet <offset>dB
+    [A] RF path 1 cable correction.
+
+SOURce2:FREQuency <frequency>Hz
+    [A] RF path 2 frequency.
+
+SOURce2:FREQuency:MODE CW
+    [A] RF path 2 CW mode.
+
+SOURce2:MODulation:ALL:STATe OFF
+    [A] RF path 2 modulation off.
+
+SOURce2:POWer <level>dBm
+    [A] RF path 2 level.
+
+SOURce2:POWer:MODE CW
+    [A] RF path 2 constant level.
+
+SOURce2:POWer:OFFSet <offset>dB
+    [A] RF path 2 cable correction.
+
+SOURce:POWer:OFFSet <offset>dB
+    [P] First-path offset alias.
+
+SOURce:ROSCillator:EXTernal:FREQuency 10MHZ
+    [A] Shared external reference frequency.
+
+SOURce:ROSCillator:SOURce <INT|EXT>
+    [A] Shared reference source; app uses EXT.
+
+SYSTem:ERRor:ALL?
+    [R] Read and clear the error queue.
+
+SYSTem:ERRor?
+    [R] Read the next error.
+
+IZ245 – Receiver
+================
+
+*IDN?
+    [A/P] Identification and firmware/hardware versions.
+
+*OPC?
+    [A/P] Operation synchronization.
+
+*RST
+    [A/P] Reset.
+
+AUX:SYNC OFF
+    [P] Auxiliary synchronization setting.
+
+BAND <bandwidth>Hz
+    [A/P] Receiver measurement bandwidth; e.g. BAND 20M.
+
+BAND:SAMP:IQ:FREQ?
+    [A/P] IQ sampling rate in Hz.
+
+BAND?
+    [A/P] Current receiver bandwidth.
+
+DETector:CLEar
+    [A/P] Clear detector before measurement.
+
+FILT?
+    [P] Filter query.
+
+FILTerbank <filter>
+    [A] Values used: 407k, 470k, 10M, 50M, 80M.
+
+FILTerbank:MODE <AUTO|MANUAL>
+    [A] IF filter selection mode.
+
+FREQ <frequency>Hz
+    [A/P] Tune; e.g. FREQ 500MHz.
+
+FREQ:PLAN:BAND1:THR <frequency>
+    [A] Thresholds used: 1MHz, 80MHz, 90MHz.
+
+FREQ:PLAN:INPUT:MODE <SIN|MUL>
+    [A] Receiver RF input plan.
+
+FREQ?
+    [P] Current frequency.
+
+GNSS:COOR?
+    [P] Coordinates, main receiver SCPI connection.
+
+GNSS:MODE SS
+    [P] GNSS static mode; separate GPS/PPSYNC port, see notes.
+
+GNSS:MODE?
+    [P] GNSS mode query; separate GPS/PPSYNC port.
+
+INP:ATT 0
+    [P] Attenuator setting used by device reset.
+
+INP:GAIN <ON|OFF|0|-10|-20>
+    [A/P] Gain settings observed in the sources.
+
+INP:GAIN?
+    [P] Read gain setting.
+
+INP:PRES <AUTO|OFF>
+    [P] Preselector alias.
+
+INP:PRES?
+    [P] Preselector state alias.
+
+INP:PRESelector:PATH <path>
+    [A] Paths used: BYPASS, 10, 20, 30, 520, 8000.
+
+INPUT:PRES:FREQUENCY <frequency_hz>
+    [A] Manual preselector center.
+
+INPUT:PRES:HP <frequency_hz>
+    [A] Preselector high-pass edge.
+
+INPUT:PRES:LP <frequency_hz>
+    [A] Preselector low-pass edge.
+
+INPUT:PRESELECTOR <AUTO|OFF>
+    [A] Preselector control.
+
+INPUT:PRESELECTOR:GAIN <ON|OFF>
+    [A] Preselector amplifier.
+
+INPut[:RF2]:ATTenuator:RF1 6
+    [A] Literal Test7 RF2 command as supplied; brackets retained.
+
+INPut[:RF2]:ATTenuator:RF2 16
+    [A] Literal Test7 RF2 command as supplied; brackets retained.
+
+LOG:STR0:MASK 0x0
+    [P] Disable GNSS logging; separate GPS/PPSYNC port.
+
+LOG:STR0:MASK 0x0202
+    [P] Enable GNSS logging; separate GPS/PPSYNC port.
+
+ROSC:SOUR OUT
+    [A] Enable DUT reference output for the generator.
+
+SENSe:DATA?
+    [A/P] Detector result list; interpretation is in test procedures.
+
+SOURce:TRACking:POW -13
+    [A] Internal synthesis Test4 setting.
+
+SWEEP:BAND <bandwidth_hz>
+    [P] Sweep bandwidth.
+
+SWEEP:DATA:ALL?
+    [P] Fetch sweep data.
+
+SWEEP:DWELL <seconds>
+    [A/P] Set detector/sweep dwell.
+
+SWEEP:LIN <start_hz>Hz,<step_hz>Hz,<points>
+    [P] Configure linear sweep.
+
+SWEEP:RUN SINGLE
+    [P] Run one sweep.
+
+SYS:CAL:OFF
+    [P] Calibration-off form found in device.py.
+
+SYS:CAL:ON
+    [P] Calibration-on form found in device.py.
+
+SYST:ADCSR?
+    [P] ADC status query.
+
+SYST:BOOT:MOD READY
+    [P] Device reset/setup state.
+
+SYST:CAL <ON|OFF>
+    [A] Calibration form used by the app.
+
+TRACE:TYPE:IQTIME?
+    [P] IQ time query.
+
+TRACE:TYPE:MEM:MODE CYCLICRAM
+    [P] Package inventory only; app acquisition uses LINEAR.
+
+TRACE:TYPE:MEM:MODE LINEAR
+    [A/P] Finite capture mode.
+
+TRACE:TYPE:MEM:SEND <components>
+    [A/P] Request capture; components = 2 * complex samples.
+
+TRACE:TYPE:MEM:TIM?
+    [P] Device time query.
+
+TRACe:TYPe:MEMory:FORMAT32:BANDwidth:UPPer 1
+    [P] Package 16-bit format selector, not a receiver BAND setting.
+
+TRACe:TYPe:MEMory:FORMAT32:BANDwidth:UPPer 100M
+    [A/P] Package 32-bit format selector.
+
+TRACe:TYPe:MEMory:RAM:TIME <device_timestamp>
+    [P] Historical capture-time selection; unused by current app.
+
+Connection and syntax notes
+===========================
+The diagnostic DUT target uses the main SCPI port (5025). GNSS:MODE and
+LOG:STR0:MASK are used by iz245 on its GPS/PPSYNC connection (5020), not by
+this diagnostic DUT socket. They are listed for inventory completeness.
+
+IZ245 syntax is recorded from the app and supplied package, not inferred
+from another receiver manual. Older package methods (cyclic mode and device
+time) are documented here but are not used for current finite FFT captures.
+The INPut[:RF2] forms above retain the literal strings in the supplied Test7
+configuration; this help does not alter or certify their firmware syntax.
+
+R&S uppercase letters identify valid abbreviated keywords. SOURCE:ROSC:SOUR
+EXT and SOUR:ROSC:SOUR EXT are the same reference-selection command.
+For two SMATE200A tones, configure SOURce1/OUTPut1 and SOURce2/OUTPut2
+independently; the external reference commands are shared. Extra functions
+may require hardware/firmware options. This is a lab quick reference, not a
+complete manufacturer command catalog or a ranking by usage statistics.
+
+Sources
+=======
+R&S SMA100B User Manual, 1178.3834.02 revision 14 (official):
+https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/pdm/cl_manuals/user_manual/1178_3834_01/SMA100B_UserManual_en_14.pdf
+R&S SMATE200A Operating Manual, 1401.0940.32 revision 14 (official):
+https://scdn.rohde-schwarz.com/ur/pws/dl_downloads/dl_common_library/dl_manuals/dl_user_manual/SMATE200A_OperatingManual_en_14.pdf
+IZ245: supplied iz245/device.py and iz245/nmea.py; app cfg_*.py,
+detector.py, diagnostic_spectrum.py and fft_processor.py.
+Compiled 2026-11-17. Edit this UTF-8 text file to maintain local notes.

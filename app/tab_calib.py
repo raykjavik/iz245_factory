@@ -1,7 +1,5 @@
 """Calibration controls, threaded hardware work, and frequency plots."""
 
-import cfg_test2
-import cfg_test3
 from pathlib import Path
 from dataclasses import replace
 import logging
@@ -17,7 +15,7 @@ from measurement import SweepMeasurement
 from verification import evaluate_verification
 from sweep_chart import SweepChart, Trace
 from reference_data_provider import load_reference
-from calib_controller import (MeasurementController as CalibrationController,
+from calib_controller import (MeasurementController,
     CFG_CALIB_ALL, CFG_TEST1_ALL, CFG_NOISE_ALL, measured, MEASUREMENT_SPECS)
 from measurement_jobs import make_job
 from cfg import CFG_NOISE_DENSITY, CFG_TEST7_RF1, CFG_TEST7_RF2
@@ -68,7 +66,7 @@ class _CalibrationThread(QThread):
             if job.needs_transfer:
                 options['transfer'].validate()
                 transfer = SSHTransfer(options['transfer'], self.cancel)
-            backend = CalibrationController(None, None, self.project,
+            backend = MeasurementController(None, None, self.project,
                 calibration_dwell_sec=options['calibration_dwell'],
                 verification_dwell_sec=options['verification_dwell'],
                 operator=options['operator'], transfer=transfer,
@@ -288,7 +286,7 @@ class CalibrationTab(QWidget):
         self._clear_live()
         self.warning_log.clear()
         self.warning_log.hide()
-        self.backend = CalibrationController(None, None, project, measurement_names=self.configs)
+        self.backend = MeasurementController(None, None, project, measurement_names=self.configs)
         self.reload_cable_calibration()
         self.location.setText(f'Project folder: {project.root} | DUT: {project.prop_auto.dut_ip}')
         self.table.setRowCount(len(self.configs))
@@ -350,7 +348,7 @@ class CalibrationTab(QWidget):
     def _refresh(self):
         results = []
         for name, row in self.rows.items():
-            cm = self.backend.calibrations[name]
+            cm = self.backend.measurements[name]
             date_text = time_text = '—'
             if cm.datetime:
                 try:
@@ -408,7 +406,7 @@ class CalibrationTab(QWidget):
         self.test4.setEnabled(enabled)
         self.control_state_changed.emit()
         for name, row in self.rows.items():
-            available = measured(self.backend.calibrations[name])
+            available = measured(self.backend.measurements[name])
             if 'upload' in row:
                 row['upload'].setEnabled(enabled and available)
             row['measure'].setEnabled(bool(measure_enabled))
@@ -518,7 +516,7 @@ class CalibrationTab(QWidget):
     def _on_completed(self, name, cm):
         if name not in self.rows:
             return
-        self.backend.calibrations[name] = cm
+        self.backend.measurements[name] = cm
         self.backend.errors.pop(name, None)
         if self._live_name == name:
             self._clear_live()
@@ -601,9 +599,9 @@ class CalibrationTab(QWidget):
         return self._row_verification_result(name,measurement)[0]
 
     def _live_measurement(self,name,points,spec):
-        return SweepMeasurement(name=Path(name).stem,freq_hz=points[:,0],limit_dB=points[:,1],
+        return SweepMeasurement(name=Path(name).stem,freq_hz=points[:,0],vals=points[:,1],
             unit=spec.unit,reference_dbm=spec.power_dbm,available=True,
-            quantity='noise_density' if spec.kind == 'test2' else '')
+            quantity=spec.quantity)
 
     def _add_trace_with_reference(self, traces, label, trace, name, measurement_class, build_reference):
         """Add one project/live curve and at most one GUI-only reference overlay."""
@@ -614,25 +612,17 @@ class CalibrationTab(QWidget):
         reference = load_reference(name, measurement_class, calibration=self.mode == 'calibration')
         if reference is None:
             return
+        if hasattr(reference,'unit') and reference.unit != trace.unit:
+            return
         try:
             overlay = build_reference(reference)
         except (ValueError, TypeError) as exc:
             logging.getLogger(__name__).warning('Cannot plot optional reference %s: %s', name, exc)
             return
-        if overlay is not None:
+        if overlay is not None and overlay.unit == trace.unit:
             label = label.removeprefix('Current: ').replace(' (live)', '') + ' (reference)'
             traces[label] = replace(overlay, live=False, is_reference=True, color_key=name,
                                     color=trace.color, passed=None)
-
-    def _sweep_reference(self, reference, spec):
-        if spec.kind == 'test2':
-            return Trace(np.asarray(reference.freq_hz),cfg_test2.noise_figure_density(reference),'dB/Hz',None,
-                display_unit=cfg_test2.DISPLAY_UNIT,display_offset_db=0.)
-        if spec.kind == 'test3':
-            return Trace(np.asarray(reference.freq_hz),cfg_test3.absolute_dbm(reference),'dBm',reference.reference_dbm,
-                display_unit=cfg_test3.DISPLAY_UNIT,display_offset_db=cfg_test3.DISPLAY_OFFSET_DB)
-        return Trace(np.asarray(reference.freq_hz), np.asarray(reference.limit_dB), reference.unit,
-            reference.reference_dbm, display_unit=spec.display_unit, display_offset_db=spec.display_offset_db)
 
     def _sweep_traces(self):
         traces = {}
@@ -645,15 +635,19 @@ class CalibrationTab(QWidget):
                 if reference is None:
                     reference = self.backend.spec_for(name).power_dbm
                 spec=self.backend.spec_for(name)
+                if cm.unit != spec.unit:
+                    continue
                 try:
-                    trace = self._sweep_reference(cm,spec)
+                    trace = Trace(np.asarray(cm.freq_hz),np.asarray(cm.vals),cm.unit,cm.reference_dbm,
+                        display_unit=spec.display_unit,display_offset_db=spec.display_offset_db)
                 except ValueError as exc:
                     logging.getLogger(__name__).warning('Cannot plot %s: %s',name,exc)
                     continue
                 trace.passed=self._curve_passed(name,cm)
                 trace.reference_dbm=reference
                 self._add_trace_with_reference(traces,name,trace,name,SweepMeasurement,
-                    lambda ref:self._sweep_reference(ref,spec))
+                    lambda ref:Trace(np.asarray(ref.freq_hz),np.asarray(ref.vals),ref.unit,ref.reference_dbm,
+                        display_unit=spec.display_unit,display_offset_db=spec.display_offset_db))
         if self._show_live and self._live_name and self._live_points:
             spec = self.backend.spec_for(self._live_name)
             points = np.asarray(self._live_points)
@@ -661,7 +655,8 @@ class CalibrationTab(QWidget):
                 spec.power_dbm,live=True,display_unit=spec.display_unit,display_offset_db=spec.display_offset_db,
                 passed=self._curve_passed(self._live_name,self._live_measurement(self._live_name,points,spec)))
             self._add_trace_with_reference(traces,'Current: '+self._live_name,trace,self._live_name,
-                SweepMeasurement,lambda ref:self._sweep_reference(ref,spec))
+                SweepMeasurement,lambda ref:Trace(np.asarray(ref.freq_hz),np.asarray(ref.vals),ref.unit,ref.reference_dbm,
+                        display_unit=spec.display_unit,display_offset_db=spec.display_offset_db))
         return traces
 
     def redraw(self, *_):
